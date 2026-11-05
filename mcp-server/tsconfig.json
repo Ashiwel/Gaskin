@@ -1,0 +1,17 @@
+{
+  "compilerOptions": {
+    "target": "es2022",
+    "lib": ["ES2023"],
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "types": ["node"],
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "allowImportingTsExtensions": true,
+    "verbatimModuleSyntax": false,
+    "resolveJsonModule": true
+  },
+  "include": ["src", "test", "../src/types", "../src/engine", "../src/clinical", "../src/privacy", "../src/data", "../src/messaging", "../src/store/triage.ts"],
+  "exclude": ["../src/**/*.test.ts", "../src/**/__tests__"]
+}

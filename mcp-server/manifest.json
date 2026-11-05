@@ -1,0 +1,64 @@
+{
+  "$schema": "https://raw.githubusercontent.com/modelcontextprotocol/mcpb/main/schemas/mcpb-manifest-v0.3.schema.json",
+  "manifest_version": "0.3",
+  "name": "gaskin",
+  "display_name": "Gaskin",
+  "version": "0.1.0",
+  "description": "Lets your AI assistant read and update your Gaskin care plans. Mothers are de-identified by default.",
+  "long_description": "Gaskin is an open-source continuity-of-care planner for midwives and community health workers, from pregnancy to a child's first 1,000 days. This extension lets Claude see who to visit next, explain each mother's plan and its sources, record observations after the worker confirms them, and draft messages for mothers. Everything runs on this computer from the Gaskin data file you choose. By default the assistant sees tokens such as M-7F3A, age bands and relative dates, never names, phone numbers, places or exact dates. It cannot delete records, remove locked plan items, hide alerts or send messages. Every call is written to an audit log in the data folder.",
+  "author": {
+    "name": "Gaskin (Ash Okang Ochui and Elizabeth Okang)"
+  },
+  "license": "AGPL-3.0-only",
+  "keywords": ["maternal health", "midwife", "community health worker", "care plan", "antenatal", "postnatal", "offline"],
+  "icon": "icon.png",
+  "server": {
+    "type": "node",
+    "entry_point": "dist/server.js",
+    "mcp_config": {
+      "command": "node",
+      "args": ["${__dirname}/dist/server.js"],
+      "env": {
+        "GASKIN_DATA_DIR": "${user_config.data_folder}",
+        "GASKIN_DEIDENTIFY": "${user_config.deidentify}",
+        "GASKIN_DEMO": "${user_config.sample_data}"
+      }
+    }
+  },
+  "tools": [
+    { "name": "gaskin_whoami", "description": "The health worker, her facility, settings, and whether de-identification is on." },
+    { "name": "gaskin_list_caseload", "description": "Who to see next, ranked, with reasons. Mothers appear as tokens." },
+    { "name": "gaskin_get_care_plan", "description": "One mother's plan: stage, alerts, items with reasons and evidence grades, next contact." },
+    { "name": "gaskin_record_observation", "description": "Record vitals, symptoms, a lab result, a screening score, feeding or growth. Shows a preview first and saves only when the worker confirms." },
+    { "name": "gaskin_draft_message", "description": "Draft a message for the mother in her language. Never sends." },
+    { "name": "gaskin_list_alerts", "description": "Open danger-sign alerts, most serious first." },
+    { "name": "gaskin_explain_rule", "description": "Why an item or alert is in her plan, with sources." }
+  ],
+  "compatibility": {
+    "platforms": ["darwin", "win32", "linux"],
+    "runtimes": { "node": ">=18.0.0" }
+  },
+  "user_config": {
+    "data_folder": {
+      "type": "directory",
+      "title": "Gaskin data folder",
+      "description": "The folder that holds gaskin-data.json, for example your Gaskin USB stick or Documents/Gaskin. In the Gaskin app, use Settings, Save to folder, to put your data there.",
+      "required": false,
+      "default": "${DOCUMENTS}/Gaskin"
+    },
+    "deidentify": {
+      "type": "boolean",
+      "title": "Hide names and identifying details (recommended)",
+      "description": "On: Claude sees tokens such as M-7F3A, age bands and relative dates, never names, phone numbers, places or exact dates. Turn off only if your facility allows it and the mother has agreed.",
+      "required": false,
+      "default": true
+    },
+    "sample_data": {
+      "type": "boolean",
+      "title": "Use sample mothers if the folder is empty",
+      "description": "For training and demos only. Writes made-up mothers to the folder when it has no Gaskin data yet. Never replaces real data.",
+      "required": false,
+      "default": false
+    }
+  }
+}

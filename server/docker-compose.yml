@@ -1,0 +1,51 @@
+# Gaskin hosted service.
+#   cp .env.example .env   (fill it in)
+#   docker compose up -d                      # SQLite in the gaskin-data volume
+#   docker compose --profile postgres up -d   # with Postgres (set DATABASE_URL in .env)
+#   docker compose --profile ai up -d         # with a local open-weight model (Ollama)
+# Put a TLS reverse proxy (Caddy, nginx) in front; see docs/hosting.md.
+services:
+  gaskin:
+    build:
+      context: ..
+      dockerfile: server/Dockerfile
+    image: gaskin-server:latest
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - "127.0.0.1:8787:8787"
+    volumes:
+      - gaskin-data:/data
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+
+  postgres:
+    profiles: ["postgres"]
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: gaskin
+      POSTGRES_USER: gaskin
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+    volumes:
+      - gaskin-pg:/var/lib/postgresql/data
+
+  ollama:
+    profiles: ["ai"]
+    image: ollama/ollama:0.12.6
+    restart: unless-stopped
+    volumes:
+      - gaskin-models:/root/.ollama
+    # GPU: uncomment on a host with the NVIDIA container toolkit
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices: [{ driver: nvidia, count: 1, capabilities: [gpu] }]
+
+volumes:
+  gaskin-data:
+  gaskin-pg:
+  gaskin-models:

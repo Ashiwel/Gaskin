@@ -1,0 +1,17 @@
+{
+  "name": "Gaskin: continuity of care",
+  "short_name": "Gaskin",
+  "description": "Care planning for midwives and community health workers, from pregnancy to a child's first 1,000 days. Works offline.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#f6f1e6",
+  "theme_color": "#a3482a",
+  "lang": "en-GB",
+  "categories": ["health", "medical", "productivity"],
+  "icons": [
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
+    { "src": "icon-maskable.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "maskable" }
+  ]
+}

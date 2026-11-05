@@ -1,0 +1,16 @@
+{
+  "_comment": "Map Gaskin indicator codes and facility ids to your DHIS2 instance's UIDs. Look them up in the DHIS2 Maintenance app (Data elements, Category option combos, Organisation units). Unmapped codes are sent as codes with idScheme CODE.",
+  "idScheme": "UID",
+  "dataSet": "REPLACE_dataSetUID",
+  "dataElements": {
+    "GASKIN_ANC1": { "dataElement": "REPLACE_ANC1_UID", "categoryOptionCombo": "REPLACE_default_COC" },
+    "GASKIN_ANC4": { "dataElement": "REPLACE_ANC4_UID" },
+    "GASKIN_BIRTHS_FACILITY": { "dataElement": "REPLACE_DELIVERIES_FACILITY_UID" },
+    "GASKIN_PNC_48H": { "dataElement": "REPLACE_PNC_48H_UID" },
+    "GASKIN_IMM_BCG": { "dataElement": "REPLACE_BCG_UID" },
+    "GASKIN_IMM_PENTA3": { "dataElement": "REPLACE_PENTA3_UID" }
+  },
+  "orgUnits": {
+    "f-ng-surulere-phc": "REPLACE_orgUnitUID"
+  }
+}

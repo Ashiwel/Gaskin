@@ -1,0 +1,61 @@
+/*
+  Tailwind CSS v4, build time only. The theme maps Gaskin's design tokens (the CSS custom
+  properties in index.css, which switch for dark mode) so utilities such as bg-paper, text-ink-2,
+  border-line, text-clay, font-serif keep the same calm look in light and dark.
+  Preflight is left out: index.css carries the base styles the screens were designed with.
+*/
+@layer theme, base, components, utilities;
+@import 'tailwindcss/theme.css' layer(theme);
+@import './index.css' layer(components);
+@import 'tailwindcss/utilities.css' layer(utilities);
+
+@theme inline {
+  --color-paper: var(--paper);
+  --color-paper-sunk: var(--paper-sunk);
+  --color-card: var(--card);
+  --color-raised: var(--raised);
+  --color-ink: var(--ink);
+  --color-ink-2: var(--ink-2);
+  --color-ink-3: var(--ink-3);
+  --color-line: var(--line);
+  --color-line-2: var(--line-2);
+  --color-clay: var(--clay);
+  --color-clay-ink: var(--clay-ink);
+  --color-clay-soft: var(--clay-soft);
+  --color-green: var(--green);
+  --color-green-soft: var(--green-soft);
+  --color-amber: var(--amber);
+  --color-amber-soft: var(--amber-soft);
+  --color-red: var(--red);
+  --color-red-soft: var(--red-soft);
+  --color-red-ink: var(--red-ink);
+  --color-banner: var(--banner);
+  --color-banner-ink: var(--banner-ink);
+  --color-focus: var(--focus);
+
+  --font-serif: var(--serif);
+  --font-sans: var(--sans);
+
+  --radius-s: var(--r-s);
+  --radius-m: var(--r-m);
+  --radius-l: var(--r-l);
+
+  --shadow-soft: var(--shadow);
+}
+
+/* The rail and queue use the Tailwind dark variant only through tokens; no class-based dark mode needed. */
+
+/* Animated border trail (Animata, MIT): the angle animates around a conic gradient. */
+@property --border-trail-angle {
+  syntax: '<angle>';
+  initial-value: 0deg;
+  inherits: false;
+}
+@keyframes border-trail {
+  0% {
+    --border-trail-angle: 0deg;
+  }
+  100% {
+    --border-trail-angle: 360deg;
+  }
+}

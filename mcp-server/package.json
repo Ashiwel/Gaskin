@@ -1,0 +1,30 @@
+{
+  "name": "gaskin-mcp",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Gaskin MCP server: lets a health worker's own AI assistant read and write Gaskin, de-identified by default.",
+  "license": "AGPL-3.0-only",
+  "bin": {
+    "gaskin-mcp": "dist/server.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "bundle": "node scripts/build.mjs && node scripts/bundle.mjs",
+    "test": "vitest run",
+    "start": "node dist/server.js",
+    "start:http": "node dist/server.js --http"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.2",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@anthropic-ai/mcpb": "^2.1.2",
+    "@types/node": "^26.6.6",
+    "esbuild": "^0.28.2",
+    "vitest": "^5.1.0"
+  }
+}
