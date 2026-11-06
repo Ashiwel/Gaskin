@@ -12,7 +12,7 @@
  * on-device modes avoid a transfer altogether.
  */
 import type { CarePlan, CountryCode, Facility, LanguageCode, Mother, Worker } from '../types';
-import { ageBand, relativeDate, scrubText, type PrivacyCategory, type ScrubTerm } from './scrub';
+import { ageBand, relativeDate, scrubText, termRegex, type PrivacyCategory, type ScrubTerm } from './scrub';
 import { COUNTRY_NAMES, zoneFor } from './zones';
 
 // ---------- Directory (worker and facility names to remove) ----------
@@ -112,11 +112,18 @@ export interface TermOptions {
   extraNames?: string[];
 }
 
-/** Everything we know identifies this mother, to be removed from any text sent out */
-function motherTerms(mother: Mother): ScrubTerm[] {
+/**
+ * Everything we know identifies this mother, to be removed from any text sent out.
+ * `own` is true for the mother the text is about. Everyone else on the device gets placeholders that
+ * are never restored ([PERSON], [PLACE]), so another woman's name in a note cannot come back as hers.
+ */
+function motherTerms(mother: Mother, own = true): ScrubTerm[] {
   const terms: ScrubTerm[] = [];
+  const NAME = own ? '[MOTHER]' : '[PERSON]';
+  const BABY = own ? '[BABY]' : '[PERSON]';
+  const PLACE = own ? '[COMMUNITY]' : '[PLACE]';
   {
-    terms.push(...nameTerms(mother.name, '[MOTHER]', 'name'));
+    terms.push(...nameTerms(mother.name, NAME, own ? 'name' : 'other person name'));
     terms.push(...plain(mother.id, '[ID]', 'ID number'));
     terms.push(...plain(mother.phone?.number, '[PHONE]', 'phone number'));
     if (mother.phone?.number) {
@@ -124,20 +131,20 @@ function motherTerms(mother: Mother): ScrubTerm[] {
       if (digits.length >= 7) terms.push(...plain(digits, '[PHONE]', 'phone number'));
     }
     terms.push(...plain(mother.email, '[EMAIL]', 'email'));
-    terms.push(...placeTerms(mother.community, '[COMMUNITY]', 'community'));
+    terms.push(...placeTerms(mother.community, PLACE, 'community'));
     // Region names can be ordinary words (Ghana's "Central", "Western"): matched case-sensitively
     if (mother.region && mother.region.trim().length >= 3) terms.push({ original: mother.region.trim(), placeholder: '[REGION]', category: 'region', caseSensitive: true });
     terms.push(...plain(mother.facilityId, '[ID]', 'ID number'));
     terms.push(...plain(mother.assignedWorkerId, '[ID]', 'ID number'));
     terms.push(...plain(mother.consent?.recordedBy, '[ID]', 'ID number'));
     for (const c of mother.children ?? []) {
-      terms.push(...nameTerms(c.name, '[BABY]', 'baby name'));
+      terms.push(...nameTerms(c.name, BABY, own ? 'baby name' : 'other person name'));
       terms.push(...plain(c.id, '[ID]', 'ID number'));
     }
     for (const med of mother.medications ?? []) terms.push(...nameTerms(med.prescribedBy, '[DOCTOR]', 'doctor name'));
     for (const e of mother.events ?? []) {
       if (e.kind === 'birth') {
-        terms.push(...nameTerms(e.child?.name, '[BABY]', 'baby name'));
+        terms.push(...nameTerms(e.child?.name, BABY, own ? 'baby name' : 'other person name'));
         terms.push(...plain(e.child?.id, '[ID]', 'ID number'));
       }
       if (e.kind === 'report') terms.push(...nameTerms(e.author, '[DOCTOR]', 'doctor name'));
@@ -149,6 +156,11 @@ function motherTerms(mother: Mother): ScrubTerm[] {
   return terms;
 }
 
+/** Terms for a mother who is not the subject of the text (the server's scope, the MCP directory) */
+export function otherMotherTerms(mother: Mother): ScrubTerm[] {
+  return motherTerms(mother, false);
+}
+
 /** Terms from the whole directory: all known mothers, workers and facilities (cached) */
 function directoryTerms(): ScrubTerm[] {
   if (dirTermsCache) return dirTermsCache;
@@ -157,13 +169,14 @@ function directoryTerms(): ScrubTerm[] {
   const mothers = new Map<string, Mother>();
   for (const m of dir.mothers ?? []) mothers.set(m.id, m);
   for (const [id, m] of remembered) if (!mothers.has(id)) mothers.set(id, m);
-  for (const m of mothers.values()) terms.push(...motherTerms(m));
+  for (const m of mothers.values()) terms.push(...motherTerms(m, false));
+  // Other workers and facilities: removed, but never restored as hers (see motherTerms)
   for (const w of dir.workers ?? []) {
-    terms.push(...nameTerms(w.name, '[WORKER]', 'health worker name'));
+    terms.push(...nameTerms(w.name, '[PERSON]', 'health worker name'));
     terms.push(...plain(w.id, '[ID]', 'ID number'));
   }
   for (const f of dir.facilities ?? []) {
-    terms.push(...placeTerms(f.name, '[FACILITY]', 'facility'));
+    terms.push(...placeTerms(f.name, '[OTHER_FACILITY]', 'facility'));
     terms.push(...plain(f.id, '[ID]', 'ID number'));
   }
   for (const x of dir.extraNames ?? []) terms.push(...nameTerms(x.name, x.placeholder ?? '[PERSON]', 'other person name'));
@@ -187,14 +200,30 @@ export function collectTerms(mother: Mother | undefined, opts: TermOptions = {})
   for (const n of opts.extraNames ?? []) terms.push(...nameTerms(n, '[PERSON]', 'other person name'));
   // Directory-wide: every mother, worker and facility known on this device
   terms.push(...directoryTerms());
-  // De-duplicate (first wins, so this mother's own placeholders take precedence)
+  // De-duplicate by the text matched (first wins, so this mother's own placeholders take precedence:
+  // her own clinic stays [FACILITY] even though the directory also lists it as another facility)
   const seen = new Set<string>();
   return terms.filter((t) => {
-    const k = `${t.original.toLowerCase()}|${t.placeholder}`;
+    const k = `${t.caseSensitive ? t.original : t.original.toLowerCase()}`;
     if (seen.has(k)) return false;
     seen.add(k);
     return true;
   });
+}
+
+/**
+ * Names of facilities, other than her own, that this text mentions. When exactly one is mentioned
+ * (her referral hospital), the AI layer can safely put it back in place of [OTHER_FACILITY].
+ */
+export function otherFacilitiesIn(text: string, mother?: Mother): string[] {
+  const dir = directory;
+  const own = mother?.facilityId;
+  const found: string[] = [];
+  for (const f of dir.facilities ?? []) {
+    if (f.id === own || !f.name || f.name.trim().length < 4) continue;
+    if (termRegex({ original: f.name, caseSensitive: false }).test(text) && !found.includes(f.name)) found.push(f.name);
+  }
+  return found;
 }
 
 // ---------- Safe context ----------

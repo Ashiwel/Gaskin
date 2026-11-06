@@ -1,3 +1,4 @@
+import { PLAN_TEXT } from './planText';
 /**
  * Every mother-facing sentence the engine produces, as templates with {placeholders}.
  * This table is the English source for translation packs.
@@ -237,7 +238,7 @@ export const MOTHER_TEXT: Record<string, string> = {
 
 /** Fill {placeholders}. Throws on an unknown key so missing templates fail tests, not users. */
 export function renderMotherText(key: string, params: Record<string, string | number> = {}): string {
-  const t = MOTHER_TEXT[key];
+  const t = MOTHER_TEXT[key] ?? PLAN_TEXT[key];
   if (t === undefined) throw new Error(`Missing MOTHER_TEXT template: ${key}`);
   return t.replace(/\{(\w+)\}/g, (_, k: string) => (params[k] !== undefined ? String(params[k]) : `{${k}}`));
 }

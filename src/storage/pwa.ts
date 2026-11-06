@@ -51,3 +51,36 @@ export async function registerPWA(opts: { manifest?: string; sw?: string } = {})
     return false;
   }
 }
+
+/**
+ * Content Security Policy for a self-hosted build (a facility server or the hub launcher).
+ * Put it in the page as <meta http-equiv="Content-Security-Policy" content="…"> or, better, send it as
+ * an HTTP header (frame-ancestors only works as a header). The single-file build inlines its script and
+ * styles, so 'unsafe-inline' is needed for them until the build emits hashes; everything else is shut.
+ *
+ * connect-src lists only what Gaskin can call: its own server, the AI endpoints a worker may configure,
+ * OpenStreetMap's Overpass API for setup, and WebLLM's model files. Narrow it to the ones you use.
+ */
+export function selfHostedCSP(opts: { serverOrigin?: string; aiOrigins?: string[]; allowWebLLM?: boolean; allowOverpass?: boolean } = {}): string {
+  const connect = ["'self'"];
+  if (opts.serverOrigin) connect.push(opts.serverOrigin);
+  for (const o of opts.aiOrigins ?? []) connect.push(o);
+  if (opts.allowOverpass !== false) connect.push('https://overpass-api.de');
+  if (opts.allowWebLLM) connect.push('https://cdn.jsdelivr.net', 'https://huggingface.co', 'https://*.huggingface.co', 'https://raw.githubusercontent.com');
+  const script = ["'self'", "'unsafe-inline'"];
+  if (opts.allowWebLLM) script.push('https://cdn.jsdelivr.net', "'wasm-unsafe-eval'");
+  return [
+    "default-src 'self'",
+    `script-src ${script.join(' ')}`,
+    "style-src 'self' 'unsafe-inline'",
+    "img-src 'self' data: blob:",
+    "font-src 'self' data:",
+    `connect-src ${connect.join(' ')}`,
+    // The handout preview is a srcdoc iframe; it inherits this policy and adds its own stricter one
+    "frame-src 'self' blob:",
+    "worker-src 'self' blob:",
+    "object-src 'none'",
+    "base-uri 'none'",
+    "form-action 'self'",
+  ].join('; ');
+}

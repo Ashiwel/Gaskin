@@ -9,14 +9,23 @@
     "build": "tsc -b && vite build",
     "lint": "oxlint",
     "test": "vitest run",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test:all": "vitest run && npm --prefix mcp-server test && npm --prefix server test",
+    "walkthrough": "node scripts/walkthrough.mjs",
+    "package:desktop": "npm run build && npm --prefix mcp-server run bundle && node scripts/package-desktop.mjs && node scripts/test-desktop.mjs"
   },
   "dependencies": {
-    "lucide-react": "1.58.0",
-    "react": "^19.3.1",
-    "react-dom": "^19.3.1"
+    "@internationalized/date": "3.12.4",
+    "@untitledui/icons": "0.0.23",
+    "react": "19.3.1",
+    "react-aria": "3.53.1",
+    "react-aria-components": "1.22.1",
+    "react-dom": "19.3.1",
+    "react-stately": "3.51.0",
+    "tailwind-merge": "3.7.0"
   },
   "devDependencies": {
+    "@react-aria/optimize-locales-plugin": "2.1.0",
     "@tailwindcss/vite": "4.3.3",
     "@types/node": "^24.19.2",
     "@types/react": "^19.3.0",
@@ -25,6 +34,8 @@
     "oxlint": "^1.90.0",
     "playwright-core": "^1.49.1",
     "tailwindcss": "4.3.3",
+    "tailwindcss-animate": "1.0.7",
+    "tailwindcss-react-aria-components": "2.2.0",
     "typescript": "~7.0.2",
     "vite": "^8.3.6",
     "vite-plugin-singlefile": "^2.3.4",

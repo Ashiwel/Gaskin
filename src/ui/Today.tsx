@@ -1,272 +1,243 @@
+/**
+ * Today: a health worker's morning. Who needs her now, what is due this fortnight, what changed
+ * overnight, the replies mothers sent, and everyone else. Pictures before lists: the caseload as
+ * one split bar, each urgent mother as a card with her journey and readings, the fortnight as a
+ * calendar strip. In personal mode the same route is "My day" for one mother.
+ */
 import { useMemo, useState } from 'react';
-import type { CarePlan, CountryCode, Mother, JourneyStage } from '../types';
-import { useApp, usePlans, useWorker } from '../store';
+import { AlertTriangle, MessageChatCircle, RefreshCw01, UserPlus01 } from '@untitledui/icons';
+import type { JourneyStage } from '../types';
+import { useApp, useWorker } from '../store';
+import { Button } from '../components/base/buttons/button';
+import { cx } from '../utils/cx';
 import { useNav } from './nav';
-import { IPlus, ISearch } from './icons';
-import { Empty } from './components';
-import {
-  place,
-  daysBetween,
-  fmtDate,
-  relDay,
-  stageLine,
-  STAGE_LABELS,
-  topAlert,
-  urgencyOf,
-  URGENCY_LABELS,
-  URGENCY_RANK,
-  type Urgency,
-} from './format';
-import { COUNTRIES } from '../data';
-import { TRIAGE_LABELS, type TriageTier } from '../store/triage';
-import { cn } from './animata/cn';
+import { firstName, fmtDate, greeting, isoDay, STAGE_LABELS } from './format';
+import { can, personalMotherId, usePersonalMode, type Scope } from './today/access';
+import { fortnight, isNeedsNow, useAllRows, useOvernight, useReplies, useScopedRows, type CaseRow } from './today/model';
+import { CaseloadSummary, countCaseload } from './today/CaseloadSummary';
+import { NeedsNowCard } from './today/NeedsNowCard';
+import { Replies } from './today/Replies';
+import { CaseList } from './today/CaseList';
+import { DayList, FortnightStrip, dayTitle } from './today/Schedule';
+import { MyDay } from './today/MyDay';
+import { FilterChip, MotherAvatar, SectionHead } from './today/parts';
 
-const DOT: Partial<Record<Urgency, string>> = { emergency: 'bg-red', urgent: 'bg-amber', overdue: 'bg-clay', today: 'bg-green' };
+export type { CaseRow } from './today/model';
+export { unreadFor } from './today/model';
 
-export interface CaseRow {
-  mother: Mother;
-  plan: CarePlan;
-  urgency: Urgency;
-  score: number;
-  reason: string;
-  unread: number;
-  triage?: TriageTier;
-}
-
-export function unreadFor(motherId: string, inbound: { motherId: string; receivedAt: string }[], readAt?: string): number {
-  return inbound.filter((m) => m.motherId === motherId && (!readAt || m.receivedAt > readAt)).length;
-}
-
+/** Every mother on this device, most urgent first (the shell uses it for badges and notifications). */
 export function useCaseload(): CaseRow[] {
-  const { state } = useApp();
-  const plans = usePlans();
-  return useMemo(() => {
-    const rows: CaseRow[] = [];
-    for (const m of state.mothers) {
-      const plan = plans.get(m.id);
-      if (!plan) continue;
-      const urgency = urgencyOf(plan, state.clock);
-      const cp = plan.state.contactPriority;
-      const a = topAlert(plan.alerts);
-      let reason = cp?.reasons?.[0] ?? '';
-      if (!reason) {
-        if (a) reason = a.title;
-        else if (plan.nextContact) {
-          const d = daysBetween(state.clock, plan.nextContact.date);
-          reason = d < 0 ? `${plan.nextContact.label} was due ${relDay(plan.nextContact.date, state.clock)}` : `${plan.nextContact.label}, ${relDay(plan.nextContact.date, state.clock)}`;
-        } else reason = plan.summary;
-      }
-      // Alerts always lead, whatever the score says.
-      if (a && (a.level === 'emergency' || a.level === 'urgent') && cp?.reasons?.[0] && !cp.reasons[0].toLowerCase().includes(a.title.toLowerCase().slice(0, 12))) {
-        reason = a.title;
-      }
-      const readAt = state.readInbound[m.id];
-      const unreadMsgs = state.inbound.filter((x) => x.motherId === m.id && (!readAt || x.receivedAt > readAt));
-      const tiers = unreadMsgs.map((x) => state.inboundTriage[x.id]).filter(Boolean) as TriageTier[];
-      const triage = tiers.includes('emergency') ? 'emergency' : tiers.includes('same_day') ? 'same_day' : tiers.length ? 'next_contact' : undefined;
-      // An unread message with danger signs lifts her up, even before anyone has opened it.
-      let u = urgency;
-      if (triage === 'emergency' && URGENCY_RANK[u] > URGENCY_RANK.urgent) {
-        u = 'urgent';
-        reason = 'She reported danger signs by message';
-      }
-      rows.push({ mother: m, plan, urgency: u, score: cp?.score ?? 0, reason, unread: unreadMsgs.length, triage });
-    }
-    rows.sort((a, b) => {
-      const u = URGENCY_RANK[a.urgency] - URGENCY_RANK[b.urgency];
-      if (u) return u;
-      if (b.score !== a.score) return b.score - a.score;
-      const da = a.plan.nextContact?.date ?? '9999';
-      const db = b.plan.nextContact?.date ?? '9999';
-      return da < db ? -1 : da > db ? 1 : a.mother.name.localeCompare(b.mother.name);
-    });
-    return rows;
-  }, [state.mothers, state.clock, state.inbound, state.readInbound, state.inboundTriage, plans]);
+  return useAllRows();
 }
 
 type RiskFilter = 'all' | 'alerts' | 'high' | 'messages';
 
+export const SCOPE_LABEL: Record<Scope, string> = { mine: 'mothers in your care', facility: 'mothers at your facility', all: 'mothers on this device' };
+
 export function Today() {
-  const { state, dispatch } = useApp();
+  const personal = usePersonalMode();
+  const { state } = useApp();
+  const all = useAllRows();
+  if (personal) {
+    const id = personalMotherId(state.mothers);
+    const row = all.find((r) => r.mother.id === id);
+    if (row) return <MyDay row={row} />;
+  }
+  return <WorkerToday />;
+}
+
+function WorkerToday() {
+  const { state } = useApp();
   const worker = useWorker();
   const { go } = useNav();
-  const all = useCaseload();
-  const [q, setQ] = useState('');
+  const { rows, scope } = useScopedRows();
+  const replies = useReplies(rows);
+  const overnight = useOvernight(rows);
+  const counts = useMemo(() => countCaseload(rows, state.clock), [rows, state.clock]);
+  const sched = useMemo(() => fortnight(rows, state.clock), [rows, state.clock]);
+  const today = isoDay(state.clock);
+  const [day, setDay] = useState(today);
   const [stage, setStage] = useState<JourneyStage | 'all'>('all');
   const [risk, setRisk] = useState<RiskFilter>('all');
+  const [showAllNow, setShowAllNow] = useState(false);
+  const canVisit = can(worker, 'visits.start');
+  const canRegister = can(worker, 'mothers.register');
+  const facility = state.facilities.find((f) => f.id === worker?.facilityId);
 
-  const rows = all.filter((r) => {
-    if (state.country !== 'ALL' && r.mother.country !== state.country) return false;
+  const now = rows.filter(isNeedsNow);
+  const nowShown = showAllNow ? now : now.slice(0, 6);
+  const rest = rows.filter((r) => !isNeedsNow(r));
+  const filtered = rest.filter((r) => {
     if (stage !== 'all' && r.plan.state.stage !== stage) return false;
     if (risk === 'alerts' && r.plan.alerts.length === 0) return false;
-    if (risk === 'high' && !r.plan.state.risks.some((k) => k.severity === 'high' || k.severity === 'urgent')) return false;
+    if (risk === 'high' && r.riskLevel !== 'high' && r.riskLevel !== 'danger') return false;
     if (risk === 'messages' && r.unread === 0) return false;
-    if (q.trim()) {
-      const s = q.trim().toLowerCase();
-      const hay = `${r.mother.name} ${r.mother.community} ${r.mother.region}`.toLowerCase();
-      if (!hay.includes(s)) return false;
-    }
     return true;
   });
-
-  const inCountry = all.filter((r) => state.country === 'ALL' || r.mother.country === state.country);
-  const counts = {
-    emergency: inCountry.filter((r) => r.urgency === 'emergency').length,
-    urgent: inCountry.filter((r) => r.urgency === 'urgent').length,
-    overdue: inCountry.filter((r) => r.urgency === 'overdue').length,
-    today: inCountry.filter((r) => r.urgency === 'today').length,
-  };
-  const needNow = counts.emergency + counts.urgent;
+  const dangerNow = now.filter((r) => r.urgency === 'emergency' || r.triage === 'emergency').length;
+  const bucket = sched.days.find((d) => d.date === day);
 
   let headline: string;
-  if (needNow > 0) headline = `${needNow === 1 ? 'One mother needs' : `${needNow} mothers need`} you now.`;
-  else if (counts.overdue + counts.today > 0) headline = `${counts.overdue + counts.today} to see today.`;
-  else headline = 'Everyone is on track.';
-
-  let lastGroup: Urgency | null = null;
+  if (dangerNow > 0) headline = `${dangerNow === 1 ? 'One mother needs' : `${dangerNow} mothers need`} you now`;
+  else if (now.length > 0) headline = now.length === 1 ? 'One mother to see today' : `${now.length} mothers to see today`;
+  else headline = 'Everyone is on track';
 
   return (
-    <div className="page">
-      <header className="today-head">
-        <p className="date">
-          {fmtDate(state.clock, { weekday: true, year: true })} · {worker ? `${worker.name}` : ''}
-        </p>
-        <h1 className="t-display">{headline}</h1>
-        <p className="lede">
-          Who to see next, ranked by danger signs first, then missed and due contacts.
-          {counts.overdue ? ` ${counts.overdue} overdue.` : ''}
-        </p>
+    <div className="mx-auto grid max-w-[1280px] grid-cols-1 gap-8" data-testid="today">
+      {/* 1. Greeting, the date, who is acting, and what changed overnight */}
+      <header className="flex flex-wrap items-end justify-between gap-4">
+        <div className="min-w-0">
+          <p className="flex items-center gap-2 text-sm text-tertiary">
+            <span>{fmtDate(state.clock, { weekday: true, year: true })}</span>
+            {worker ? (
+              <>
+                <span aria-hidden="true">·</span>
+                <MotherAvatar name={worker.name} size="sm" className="size-5 text-[10px]" />
+                <span className="truncate">
+                  {firstName(worker.name)}
+                  {facility ? <span className="hidden sm:inline">, {facility.name}</span> : null}
+                </span>
+              </>
+            ) : null}
+          </p>
+          <h1 className="mt-1 text-display-xs font-semibold text-primary lg:text-display-sm">
+            <span className="sr-only">{greeting(state.clock)}, {worker ? firstName(worker.name) : ''}. </span>
+            {headline}
+          </h1>
+          <Overnight o={overnight} replies={replies.length} />
+        </div>
+        {canRegister ? (
+          <Button color="secondary" size="md" iconLeading={UserPlus01} onClick={() => go({ name: 'register' })} className="hidden sm:inline-flex">
+            Register a mother
+          </Button>
+        ) : null}
       </header>
 
-      <div className="toolbar">
-        <div className="btn-row">
-          <label className="search" style={{ flex: '1 1 260px' }}>
-            <ISearch />
-            <span className="sr">Search mothers</span>
-            <input id="search" className="input" placeholder="Search by name or community" value={q} onChange={(e) => setQ(e.target.value)} />
-          </label>
-          <button className="btn" onClick={() => go({ name: 'register' })}>
-            <IPlus /> Register a mother
-          </button>
-        </div>
-        <div className="filters" role="group" aria-label="Filters">
-          <div className="group">
-            <span className="group-label">Stage</span>
-            {(['all', 'pregnancy', 'postpartum', 'infant', 'preconception'] as const).map((s) => (
-              <button key={s} className="filter-chip" aria-pressed={stage === s} onClick={() => setStage(s)}>
-                {s === 'all' ? 'All' : STAGE_LABELS[s]}
-              </button>
-            ))}
+      {/* 2. The caseload as one picture */}
+      <CaseloadSummary
+        counts={counts}
+        scopeLabel={SCOPE_LABEL[scope]}
+        onPick={(k) => {
+          if (k === 'upcoming' || k === 'due') document.getElementById('fortnight-h')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+          else if (k === 'well') document.getElementById('everyone-h')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+          else document.getElementById('now-h')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }}
+      />
+
+      <div className="grid gap-8 lg:grid-cols-12 lg:gap-6">
+        {/* 3. Needs you now */}
+        <section aria-labelledby="now-h" className="grid content-start gap-4 lg:col-span-8">
+          <SectionHead id="now-h" title="Needs you now">
+            {now.length ? 'Danger signs first, then missed and due contacts' : 'Nobody has an alert or a contact due today'}
+          </SectionHead>
+          {now.length ? (
+            <div className={cx('queue grid gap-3', now.length > 1 && 'sm:grid-cols-2')} data-testid="needs-now">
+              {nowShown.map((r, i) => (
+                <NeedsNowCard key={r.mother.id} row={r} lead={i === 0} canVisit={canVisit} />
+              ))}
+            </div>
+          ) : (
+            <div className="rounded-2xl bg-success-primary p-5 text-md text-success-primary">Everyone in your care is on track today.</div>
+          )}
+          {now.length > nowShown.length ? (
+            <div>
+              <Button color="link-color" size="md" onClick={() => setShowAllNow(true)}>
+                {`Show ${now.length - nowShown.length} more`}
+              </Button>
+            </div>
+          ) : null}
+        </section>
+
+        {/* 4. The fortnight */}
+        <section aria-labelledby="fortnight-h" className="grid content-start gap-4 lg:col-span-4">
+          <SectionHead id="fortnight-h" title="Next 14 days">
+            {sched.overdue.length ? <span className="text-warning-primary">{sched.overdue.length} overdue, gathered on today</span> : `${sched.days.reduce((s, d) => s + d.contacts.length, 0)} contacts due`}
+          </SectionHead>
+          <div className="min-w-0 rounded-2xl bg-primary p-3 shadow-xs ring-1 ring-secondary ring-inset">
+            <FortnightStrip days={sched.days} selected={day} onSelect={setDay} clock={state.clock} />
+            <h3 className="mt-3 px-1 text-sm font-semibold text-primary">{dayTitle(day, state.clock)}</h3>
+            <div className="px-1">
+              <DayList bucket={bucket} canVisit={canVisit} compact />
+            </div>
           </div>
-          <div className="group">
-            <span className="group-label">Show</span>
-            {(
-              [
-                ['all', 'Everyone'],
-                ['alerts', 'Alerts'],
-                ['high', 'High risk'],
-                ['messages', 'New messages'],
-              ] as const
-            ).map(([k, l]) => (
-              <button key={k} className="filter-chip" aria-pressed={risk === k} onClick={() => setRisk(k)}>
-                {l}
-              </button>
-            ))}
-          </div>
-          <div className="group">
-            <span className="group-label">Country</span>
-            {(['ALL', 'NG', 'KE', 'GH'] as const).map((c) => (
-              <button key={c} className="filter-chip" aria-pressed={state.country === c} onClick={() => dispatch({ type: 'setCountry', country: c })}>
-                {c === 'ALL' ? 'All' : (COUNTRIES[c as CountryCode]?.name ?? c)}
-              </button>
-            ))}
-          </div>
-        </div>
+        </section>
       </div>
 
-      {rows.length === 0 ? (
-        <Empty art="calendar" title="No one matches these filters">
-          <button className="link-btn" onClick={() => { setQ(''); setStage('all'); setRisk('all'); }}>
-            Clear filters
-          </button>
-        </Empty>
-      ) : (
-        <ol className="queue m-0 list-none border-t border-line p-0" aria-label="Who to see next">
-          {rows.map((r, i) => {
-            const showGroup = r.urgency !== lastGroup;
-            lastGroup = r.urgency;
-            const risks = r.plan.state.risks.filter((k) => k.severity !== 'low').slice(0, 3);
-            const nc = r.plan.nextContact;
-            return (
-              <li key={r.mother.id}>
-                {showGroup ? (
-                  <div className="flex items-center gap-2 pt-[22px] pb-1.5 text-[13px] font-semibold text-ink-3">
-                    <span aria-hidden="true" className={cn('h-3.5 w-[3px] rounded-[2px]', DOT[r.urgency] ?? 'bg-line-2')} />
-                    {URGENCY_LABELS[r.urgency]}
-                  </div>
-                ) : null}
-                <div
-                  className={`row lv-${r.urgency} grid w-full cursor-pointer grid-cols-[20px_minmax(0,1fr)] items-start gap-2.5 border-b border-line py-4 pr-2 pl-1.5 text-left transition-colors duration-150 hover:bg-card motion-reduce:transition-none sm:grid-cols-[28px_minmax(0,1fr)_auto] sm:gap-3.5`}
-                  data-mother={r.mother.name}
-                  onClick={() => go({ name: 'patient', id: r.mother.id, tab: 'plan' })}
-                >
-                  <span className="text-right font-serif text-[15px] leading-[1.4] text-ink-3 tabular-nums sm:text-[18px]">{i + 1}</span>
-                  <span className="grid min-w-0 gap-1">
-                    <span className="flex flex-wrap items-baseline gap-2 font-serif text-[19px] leading-tight font-medium">
-                      <button className="row-link cursor-pointer border-0 bg-transparent p-0 text-left text-inherit [font:inherit]" onClick={(e) => { e.stopPropagation(); go({ name: 'patient', id: r.mother.id, tab: 'plan' }); }}>
-                        {r.mother.name}
-                      </button>
-                      {r.unread > 0 ? (
-                        <span className="badge-count" title={`${r.unread} new message${r.unread === 1 ? '' : 's'}`} aria-label={`${r.unread} new messages`}>
-                          {r.unread}
-                        </span>
-                      ) : null}
-                      {r.triage ? <span className={`triage ${r.triage}`}>{TRIAGE_LABELS[r.triage]}</span> : null}
-                    </span>
-                    <span className="text-[13.5px] text-ink-2">
-                      {stageLine(r.mother, r.plan.state)} · {place(r.mother)}
-                    </span>
-                    <span className="flex items-baseline gap-1.5 text-[14px] text-ink">
-                      <span aria-hidden="true" className={cn('size-1.5 flex-none -translate-y-0.5 rounded-full', DOT[r.urgency] ?? 'bg-ink-3')} />
-                      {r.reason}
-                    </span>
-                    {risks.length ? (
-                      <span className="chips">
-                        {risks.map((k) => (
-                          <span key={k.code} className={`chip ${k.severity === 'urgent' || k.severity === 'high' ? 'red' : 'amber'}`}>
-                            {k.label}
-                          </span>
-                        ))}
-                      </span>
-                    ) : null}
-                  </span>
-                  <span className="col-start-2 flex flex-wrap items-center gap-x-2.5 gap-y-1.5 text-left text-[13px] text-ink-3 sm:col-start-auto sm:grid sm:justify-items-end sm:text-right">
-                    {r.urgency !== 'rest' ? (
-                      <button
-                        className="btn small accent"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          go({ name: 'visit', id: r.mother.id });
-                        }}
-                      >
-                        Start visit
-                      </button>
-                    ) : null}
-                    {nc ? (
-                      <>
-                        <span className="font-medium text-ink-2">{relDay(nc.date, state.clock).replace(/^./, (c) => c.toUpperCase())}</span>
-                        <span>{nc.label}</span>
-                      </>
-                    ) : (
-                      <span>No contact booked</span>
-                    )}
-                  </span>
-                </div>
-              </li>
-            );
-          })}
-        </ol>
-      )}
+      {/* 5. Replies, triaged */}
+      <Replies replies={replies} />
+
+      {/* 6. Everyone else */}
+      <section aria-labelledby="everyone-h" className="grid gap-3">
+        <SectionHead id="everyone-h" title="Everyone else">
+          {`${rest.length} on track or with a contact later`}
+        </SectionHead>
+        <div className="scrollbar-hide -mx-4 flex gap-2 overflow-x-auto px-4 pb-1 lg:mx-0 lg:flex-wrap lg:px-0" role="group" aria-label="Filters">
+          {(['all', 'pregnancy', 'postpartum', 'infant', 'preconception'] as const).map((s) => (
+            <FilterChip key={s} pressed={stage === s} onClick={() => setStage(s)} count={s === 'all' ? rest.length : rest.filter((r) => r.plan.state.stage === s).length}>
+              {s === 'all' ? 'All' : STAGE_LABELS[s]}
+            </FilterChip>
+          ))}
+          <span aria-hidden="true" className="mx-1 w-px shrink-0 self-stretch bg-border-secondary" />
+          <FilterChip pressed={risk === 'alerts'} onClick={() => setRisk(risk === 'alerts' ? 'all' : 'alerts')} tone="warning">
+            Alerts
+          </FilterChip>
+          <FilterChip pressed={risk === 'high'} onClick={() => setRisk(risk === 'high' ? 'all' : 'high')} tone="error">
+            High risk
+          </FilterChip>
+          <FilterChip pressed={risk === 'messages'} onClick={() => setRisk(risk === 'messages' ? 'all' : 'messages')}>
+            New messages
+          </FilterChip>
+        </div>
+        {filtered.length ? (
+          <CaseList rows={filtered} label="Everyone else" />
+        ) : (
+          <div className="flex flex-col items-center gap-2 rounded-2xl bg-secondary py-10 text-center">
+            <p className="text-sm text-tertiary">No one matches these filters.</p>
+            <Button
+              color="link-color"
+              size="sm"
+              onClick={() => {
+                setStage('all');
+                setRisk('all');
+              }}
+            >
+              Clear filters
+            </Button>
+          </div>
+        )}
+      </section>
+
+      {canRegister ? (
+        <div className="sm:hidden">
+          <Button color="secondary" size="lg" iconLeading={UserPlus01} onClick={() => go({ name: 'register' })} className="w-full">
+            Register a mother
+          </Button>
+        </div>
+      ) : null}
     </div>
+  );
+}
+
+/** What changed since yesterday, as three small pills. */
+function Overnight({ o, replies }: { o: ReturnType<typeof useOvernight>; replies: number }) {
+  const items = [
+    o.newAlerts ? { icon: AlertTriangle, n: o.newAlerts, word: o.newAlerts === 1 ? 'new alert' : 'new alerts', tone: 'text-error-primary' } : null,
+    replies ? { icon: MessageChatCircle, n: replies, word: replies === 1 ? 'unread reply' : 'unread replies', tone: 'text-brand-secondary' } : null,
+    o.plansChanged ? { icon: RefreshCw01, n: o.plansChanged, word: o.plansChanged === 1 ? 'plan updated' : 'plans updated', tone: 'text-secondary' } : null,
+  ].filter(Boolean) as Array<{ icon: typeof AlertTriangle; n: number; word: string; tone: string }>;
+  if (!items.length) return null;
+  return (
+    <ul className="mt-3 flex flex-wrap gap-2" aria-label="Since yesterday">
+      {items.map((it) => {
+        const Icon = it.icon;
+        return (
+          <li key={it.word} className={cx('inline-flex h-7 items-center gap-1.5 rounded-full bg-secondary px-2.5 text-xs font-medium', it.tone)}>
+            <Icon className="size-3.5" aria-hidden="true" />
+            <span className="tnum">{it.n}</span>
+            <span className="text-tertiary">{it.word}</span>
+          </li>
+        );
+      })}
+    </ul>
   );
 }

@@ -7,7 +7,7 @@ import { useEffect, useState, useSyncExternalStore, type ReactNode } from 'react
 import * as AI from '../ai';
 import * as Privacy from '../privacy';
 import type { AIProvider } from '../ai';
-import { IChevron, IShield } from './icons';
+import { Check, ChevronDown, Lock01, Send01, ShieldTick } from '@untitledui/icons';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type AnyFn = (...a: any[]) => unknown;
@@ -177,7 +177,15 @@ export function previewText(task: AITask, args: Record<string, unknown>): Previe
 /** Highlight placeholder tokens like [NAME], <PLACE>, {date} so the reader sees what was removed. */
 function highlight(text: string): ReactNode[] {
   const parts = text.split(/(\[[A-Z_ ]{2,}[0-9]*\]|<[A-Z_ ]{2,}[0-9]*>|\{[A-Z_ ]{2,}[0-9]*\})/g);
-  return parts.map((p, i) => (i % 2 ? <mark key={i}>{p}</mark> : <span key={i}>{p}</span>));
+  return parts.map((p, i) =>
+    i % 2 ? (
+      <mark key={i} className="rounded bg-brand-primary px-0.5 font-semibold text-brand-secondary">
+        {p}
+      </mark>
+    ) : (
+      <span key={i}>{p}</span>
+    ),
+  );
 }
 
 const REMOVED_LABEL: Record<string, string> = {
@@ -195,48 +203,117 @@ const REMOVED_LABEL: Record<string, string> = {
   age: 'exact age',
 };
 
-export function WhatAISees({ task, args, mode }: { task: AITask; args: Record<string, unknown>; mode?: string }) {
-  const [open, setOpen] = useState(false);
+export function removedLabels(removed?: string[]): string[] {
+  return Array.from(new Set((removed ?? []).map((r) => REMOVED_LABEL[r] ?? r.replace(/_/g, ' '))));
+}
+
+/** What stays on the phone: her real details, as the worker knows them. */
+export interface LocalFacts {
+  name?: string;
+  phone?: string;
+  place?: string;
+  facility?: string;
+  worker?: string;
+  age?: number;
+}
+
+/**
+ * "What the AI sees". compact: a disclosure under a form (plan, record). side: two columns, what
+ * stays on this phone and what the AI would receive, with placeholders highlighted.
+ */
+export function WhatAISees({ task, args, mode, layout = 'compact', local, defaultOpen }: { task: AITask; args: Record<string, unknown>; mode?: string; layout?: 'compact' | 'side'; local?: LocalFacts; defaultOpen?: boolean }) {
+  const [open, setOpen] = useState(Boolean(defaultOpen));
   const status = useAIStatus();
   const preview = open ? previewText(task, args) : null;
-  const off = preview?.wouldSend === false || status.provider === 'none' || mode === 'none';
-  return (
-    <details className="sees" onToggle={(e) => setOpen((e.target as HTMLDetailsElement).open)}>
-      <summary>
-        <IShield />
-        What the AI sees
-        <IChevron className="chev" width={14} height={14} />
-      </summary>
-      <div className="inner">
-        <p className="small soft">
-          {status.provider === 'none' || mode === 'none'
-            ? 'AI is switched off, so nothing leaves this phone. Gaskin uses its own templates instead.'
-            : off
-              ? 'No AI service is connected, so nothing leaves this phone. If one were, this is exactly what it would receive.'
-              : 'Names, phone numbers, places and dates are removed before anything leaves this phone.'}
-        </p>
-        {preview ? (
-          <>
-            {preview.removed && preview.removed.length ? (
-              <div className="chips">
-                {Array.from(new Set(preview.removed.map((r) => REMOVED_LABEL[r] ?? r.replace(/_/g, ' ')))).map((r) => (
-                  <span key={r} className="chip green">
-                    Removed {r}
-                  </span>
-                ))}
+  const aiOff = status.provider === 'none' || mode === 'none';
+  const off = preview?.wouldSend === false || aiOff;
+  const lede = aiOff
+    ? 'AI is switched off, so nothing leaves this phone. Gaskin uses its own templates instead.'
+    : off
+      ? 'No AI service is connected, so nothing leaves this phone. If one were, this is exactly what it would receive.'
+      : 'Names, phone numbers, places and dates are removed before anything leaves this phone.';
+  const removed = removedLabels(preview?.removed);
+  const localRows: Array<[string, string]> = local
+    ? ([
+        ['Her name', local.name],
+        ['Phone', local.phone],
+        ['Where she lives', local.place],
+        ['Clinic', local.facility],
+        ['Health worker', local.worker],
+        ['Age', local.age ? `${local.age}` : undefined],
+      ].filter(([, v]) => Boolean(v)) as Array<[string, string]>)
+    : [];
+  const body = preview ? (
+    layout === 'side' ? (
+      <div className="grid gap-3 md:grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)]">
+        <div className="min-w-0 rounded-lg bg-secondary p-3 ring-1 ring-secondary">
+          <p className="mb-2 flex items-center gap-1.5 text-xs font-semibold text-secondary">
+            <Lock01 aria-hidden="true" className="size-3.5" /> Stays on this phone
+          </p>
+          <dl className="grid gap-1.5 text-sm">
+            {localRows.map(([k, v]) => (
+              <div key={k} className="flex min-w-0 justify-between gap-3">
+                <dt className="shrink-0 text-tertiary">{k}</dt>
+                <dd className="truncate text-end font-medium text-primary">{v}</dd>
               </div>
-            ) : null}
-            <pre aria-label={off ? 'De-identified context' : 'Text that would be sent'}>{highlight(preview.text)}</pre>
-            {!off && (preview.provider || preview.bytes) ? (
-              <p className="tiny muted">
-                {preview.provider ? `Goes to: ${preview.provider}. ` : ''}
-                {preview.bytes ? `${preview.bytes.toLocaleString('en-GB')} bytes.` : ''}
-              </p>
-            ) : null}
-          </>
-        ) : open ? (
-          <p className="small muted">The preview is not available on this device. Only the plan items and stage are shared, never her name or number.</p>
+            ))}
+          </dl>
+          {removed.length ? (
+            <div className="mt-3 flex flex-wrap gap-1">
+              {removed.map((r) => (
+                <span key={r} className="inline-flex items-center gap-1 rounded-full bg-success-primary px-2 py-0.5 text-xs font-medium text-success-primary">
+                  <Check aria-hidden="true" className="size-3" /> Removed {r}
+                </span>
+              ))}
+            </div>
+          ) : null}
+        </div>
+        <div className="min-w-0 rounded-lg bg-primary p-3 ring-1 ring-secondary">
+          <p className="mb-2 flex items-center gap-1.5 text-xs font-semibold text-secondary">
+            <Send01 aria-hidden="true" className="size-3.5" /> {off ? 'Would be sent' : `Sent to ${preview.provider ?? 'the AI'}`}
+            {preview.bytes ? <span className="ml-auto font-normal text-tertiary tnum">{preview.bytes.toLocaleString('en-GB')} bytes</span> : null}
+          </p>
+          <pre aria-label={off ? 'De-identified context' : 'Text that would be sent'} className="max-h-64 overflow-auto font-mono text-xs leading-relaxed whitespace-pre-wrap text-secondary">
+            {highlight(preview.text)}
+          </pre>
+        </div>
+      </div>
+    ) : (
+      <>
+        {removed.length ? (
+          <div className="flex flex-wrap gap-1">
+            {removed.map((r) => (
+              <span key={r} className="inline-flex items-center gap-1 rounded-full bg-success-primary px-2 py-0.5 text-xs font-medium text-success-primary">
+                <Check aria-hidden="true" className="size-3" /> Removed {r}
+              </span>
+            ))}
+          </div>
         ) : null}
+        <pre aria-label={off ? 'De-identified context' : 'Text that would be sent'} className="max-h-60 overflow-auto rounded-lg bg-secondary p-3 font-mono text-xs leading-relaxed whitespace-pre-wrap text-secondary">
+          {highlight(preview.text)}
+        </pre>
+        {!off && (preview.provider || preview.bytes) ? (
+          <p className="text-xs text-tertiary">
+            {preview.provider ? `Goes to: ${preview.provider}. ` : ''}
+            {preview.bytes ? `${preview.bytes.toLocaleString('en-GB')} bytes.` : ''}
+          </p>
+        ) : null}
+      </>
+    )
+  ) : open ? (
+    <p className="text-sm text-tertiary">The preview is not available on this device. Only the plan items and stage are shared, never her name or number.</p>
+  ) : null;
+  return (
+    <details data-testid="what-ai-sees" open={open} className="group rounded-xl bg-primary ring-1 ring-secondary" onToggle={(e) => setOpen((e.target as HTMLDetailsElement).open)}>
+      <summary className="flex min-h-11 cursor-pointer list-none items-center gap-2 px-3.5 py-2.5 text-sm font-semibold text-secondary [&::-webkit-details-marker]:hidden">
+        <ShieldTick aria-hidden="true" className="size-4.5 text-fg-brand-secondary" />
+        What the AI sees
+        <span className="ml-auto text-xs font-normal text-tertiary">{aiOff ? 'AI off' : off ? 'Nothing sent' : 'De-identified'}</span>
+        <ChevronDown aria-hidden="true" className="size-4 text-fg-quaternary transition group-open:rotate-180" />
+      </summary>
+      <div className="grid gap-3 border-t border-secondary px-3.5 py-3">
+        <p className="text-sm text-tertiary">{lede}</p>
+        {body}
       </div>
     </details>
   );
@@ -246,8 +323,12 @@ export function AIBadge() {
   const s = useAIStatus();
   const off = s.provider === 'none';
   return (
-    <span className={`ai-badge${s.live ? ' live' : off ? ' off' : ''}`} title={s.lastError ? `Last live attempt failed: ${s.lastError}` : undefined}>
-      <i />
+    <span
+      className="inline-flex items-center gap-1.5 rounded-full bg-primary px-2.5 py-1 text-xs font-medium text-secondary ring-1 ring-secondary"
+      title={s.lastError ? `Last live attempt failed: ${s.lastError}` : undefined}
+      data-testid="ai-badge"
+    >
+      <span aria-hidden="true" className={`size-1.5 rounded-full ${s.live ? 'bg-success-solid' : off ? 'bg-quaternary' : 'bg-warning-solid'}`} />
       {s.label || (s.live ? 'Live AI' : 'Templates')}
     </span>
   );

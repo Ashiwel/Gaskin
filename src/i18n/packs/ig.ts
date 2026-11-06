@@ -27,7 +27,7 @@ const EN_MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July
  * - educ.symptom.heartburn and educ.symptom.leg_cramps (English word kept in brackets).
  * - trad.uvulectomy: "ịkpụ ihe n’akpịrị nwa" for uvula cutting.
  * - trad.wankan_jego: "kanwa" kept as the Hausa word; trad.nzu_clay: "nzu ma ọ bụ ụrọ".
- * - Glossary food measures ("aka juru" for a handful).
+ * - Glossary food measures ("aka juru" for a handful), including the Lagos line "inine na ugu".
  */
 export const ig: LanguagePack = {
   code: 'ig',
@@ -300,6 +300,8 @@ export const ig: LanguagePack = {
     'two handfuls of cooked green leaves': 'akwụkwọ nri e siri esi aka abụọ juru',
     'two handfuls of cooked ugu': 'ugu e siri esi aka abụọ juru',
     'two handfuls of cooked efo': 'inine e siri esi aka abụọ juru',
+    // Lagos profile serving (Igbo-speaking mothers in Lagos); built from the two lines above with "na" (and).
+    'two handfuls of cooked efo tete and ugu': 'inine na ugu e siri esi aka abụọ juru',
     'one egg': 'otu akwa',
     'a bowl of pap with a spoon of groundnut paste': 'otu efere akamụ ya na otu ngaji ahụekere a gwịrị agwị',
     'a handful of groundnuts': 'ahụekere aka juru',

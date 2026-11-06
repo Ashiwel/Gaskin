@@ -1,16 +1,20 @@
-import type { Alert, CarePlan, LearnedRule, Mother, Override, PlanDiff, PlanItem } from '../types';
-import { COUNTRY_RULES, MOTHER_TEXT, renderMotherText } from '../clinical';
+import type { Alert, CarePlan, LearnedRule, Mother, NextContact, Override, PlanDiff, PlanItem } from '../types';
+import { COUNTRY_RULES, MOTHER_TEXT, PLAN_TEXT, renderMotherText } from '../clinical';
 import { computeAlerts, type AlertWithShort } from './alerts';
-import { babyAge, ordinal } from './dates';
+import { babyAge, daysBetween, ordinal, shortDate } from './dates';
 import { collectFacts, type Facts } from './facts';
 import { applyLearnedRules, applyOverrides } from './learning';
 import type { LocationProfile, RuleCtx } from './items';
 import { pregnancyRules } from './rulesPregnancy';
 import { babyRules, breastfeedingRules, infantStageMotherRules, postpartumRules, preconceptionRules } from './rulesPostnatal';
 import { traditionalRules } from './rulesTraditional';
-import { nextContact, contactLabelWithDate } from './schedule';
+import { nextContact } from './schedule';
 import { stateFromFacts } from './state';
 import { renderVisitText } from '../visits/text';
+import { howToFor } from '../clinical';
+import { concurrentCareRules, perChild, severalChildrenRules } from './children';
+import { constraintRules, unknownItems } from './constraints';
+import { personalAlerts, personalItems } from './personal';
 
 export type PlanContext = {
   overrides: Override[];
@@ -18,6 +22,17 @@ export type PlanContext = {
   previous?: { version: number; itemIds: string[]; alertIds: string[] };
   /** Optional local foods, practices and malaria status for where she lives */
   location?: LocationProfile;
+  /**
+   * 'worker' (default): the full plan for a health worker.
+   * 'personal': a woman using Gaskin for herself. Mother-facing text only, alerts become
+   * "Go to [nearest facility] now" with the emergency number, worker-only items are hidden,
+   * and "Register with a clinic" / "Book your next check-up" stay until she records them.
+   */
+  mode?: 'worker' | 'personal';
+  /** Personal mode: the place to go (defaults to her registered clinic, then the country referral hospital) */
+  nearestFacility?: string;
+  /** Personal mode: emergency number to show (defaults to the country's from src/legal) */
+  emergencyNumber?: string;
 };
 
 /**
@@ -39,8 +54,14 @@ export function buildPlan(mother: Mother, asOf: string, ctx: PlanContext): CareP
       alert.motherText = renderVisitText(alert.motherTextKey, alert.motherTextParams ?? {});
       continue;
     }
-    const key = alertTextKey(alert.id, alert.level);
-    const params = /\{name\}/.test(MOTHER_TEXT[key]) ? { name: babyName } : undefined;
+    if (alert.motherTextKey && PLAN_TEXT[alert.motherTextKey] !== undefined) {
+      // Untested results and side effects carry their own plan-text template.
+      alert.motherText = renderMotherText(alert.motherTextKey, alert.motherTextParams ?? {});
+      continue;
+    }
+    const key = alertTextKey(alert.id.replace(/@.*$/, ''), alert.level);
+    const childName = alert.childId ? (f.children.find((k) => k.id === alert.childId)?.name ?? babyName) : babyName;
+    const params = /\{name\}/.test(MOTHER_TEXT[key]) ? { name: childName } : undefined;
     alert.motherTextKey = key;
     alert.motherText = renderMotherText(key, params);
     if (params) alert.motherTextParams = params;
@@ -49,35 +70,48 @@ export function buildPlan(mother: Mother, asOf: string, ctx: PlanContext): CareP
   const rules = COUNTRY_RULES[mother.country];
   const c: RuleCtx = { f, s: state, alerts, rules, simple: mother.literacy !== 'good', items: [], location: ctx.location };
 
+  // Stages can run together: a pregnancy and every child under 1,000 days are all planned.
   switch (state.stage) {
     case 'pregnancy':
       pregnancyRules(c);
-      // A pregnant mother with a child under 2 still gets the child's plan.
-      if (f.youngest && f.youngestAgeDays! <= 730) {
-        babyRules(c);
-        breastfeedingRules(c);
-      }
+      // A pregnant mother with a child under 1,000 days still gets each child's plan.
+      if (f.under1000.length) perChild(c, [babyRules, breastfeedingRules]);
+      concurrentCareRules(c);
       break;
     case 'postpartum':
       postpartumRules(c);
-      babyRules(c);
+      perChild(c, [babyRules]);
+      // Older siblings under 1,000 days keep their feeding plan.
+      if (f.under1000.length > 1) perChild({ ...c, f: { ...f, under1000: f.under1000.slice(0, -1) } }, [breastfeedingRules]);
+      severalChildrenRules(c);
       break;
     case 'infant':
-      babyRules(c);
-      breastfeedingRules(c);
+      perChild(c, [babyRules, breastfeedingRules]);
       infantStageMotherRules(c);
+      severalChildrenRules(c);
       break;
     default:
       preconceptionRules(c);
   }
   referralItems(c, alerts);
   traditionalRules(c);
+  constraintRules(c);
+  if (state.unknowns?.length) unknownItems(c, state.unknowns);
+  for (const it of c.items) {
+    if (!it.howTo) it.howTo = howToFor(it.id, it.category);
+    if (!it.childId) {
+      const sib = it.id.match(/@(.+)$/)?.[1];
+      if (sib && f.children.some((k) => k.id === sib)) it.childId = sib;
+    }
+  }
 
   let items: PlanItem[] = applyLearnedRules(c.items, ctx.learnedRules ?? [], mother, state);
   items = applyOverrides(items, ctx.overrides ?? [], mother.id);
+  if (ctx.mode === 'personal') items = personalItems(items, mother, f.asOf, ctx);
   items = sortItems(items);
 
-  const alertList = alerts.map((a) => a.alert);
+  let alertList = alerts.map((a) => a.alert);
+  if (ctx.mode === 'personal') alertList = personalAlerts(alertList, mother, ctx);
   const next = nextContact(f);
   const prev = ctx.previous;
   const activeIds = items.filter((i) => i.status !== 'removed').map((i) => i.id);
@@ -102,7 +136,7 @@ export function buildPlan(mother: Mother, asOf: string, ctx: PlanContext): CareP
     version,
     generatedAt: f.asOf,
     state,
-    summary: summarise(f, state, alerts, next ? contactLabelWithDate(next, f.asOf) : undefined),
+    summary: summarise(f, state, alerts, next),
     alerts: alertList,
     items,
     nextContact: next,
@@ -115,6 +149,7 @@ function referralItems(c: RuleCtx, alerts: AlertWithShort[]): void {
   for (const a of alerts) {
     if (a.alert.level === 'warning') continue;
     const id = `refer.${a.alert.id.replace(/^alert\./, '')}`;
+    const childId = a.alert.childId;
     if (c.items.some((i) => i.id === id)) continue;
     c.items.push({
       id,
@@ -134,6 +169,7 @@ function referralItems(c: RuleCtx, alerts: AlertWithShort[]): void {
       origin: 'guideline',
       illustration: illustrationFor(a.alert.id),
       status: 'active',
+      ...(childId ? { childId } : {}),
     });
   }
 }
@@ -174,31 +210,56 @@ function sortItems(items: PlanItem[]): PlanItem[] {
 }
 
 /** One or two plain sentences for the worker. */
-function summarise(f: Facts, s: CarePlan['state'], alerts: AlertWithShort[], next?: string): string {
+const FEEDING_WORDS: Record<string, string> = {
+  exclusive_breastfeeding: 'exclusively breastfed',
+  mixed: 'mixed feeding',
+  complementary_with_breastmilk: 'eating family food and breastfed',
+};
+
+/**
+ * One sentence on where she is, one on the top concern (alert, or high risks) when there is one,
+ * then the next contact once: "Next contact 27 Nov: ANC contact 5 (34 weeks)."
+ */
+function summarise(f: Facts, s: CarePlan['state'], alerts: AlertWithShort[], next?: NextContact): string {
   const m = f.mother;
-  const parts: string[] = [];
+  let situation: string;
   if (s.stage === 'pregnancy') {
     const preg = m.gravida > 0 ? `${ordinal(m.gravida)} pregnancy` : 'pregnant';
-    parts.push(`${s.gestationalWeeks} weeks, ${preg}${(m.pregnancy?.fetuses ?? 1) > 1 ? ' (twins)' : ''}`);
+    const kids = f.under1000.map((k) => `${k.name.split(' ')[0]} (${babyAge(daysBetween(k.dob, f.asOf))})`);
+    situation = `${s.gestationalWeeks} weeks, ${preg}${(m.pregnancy?.fetuses ?? 1) > 1 ? ' (twins)' : ''}${kids.length ? `, also caring for ${kids.join(' and ')}` : ''}`;
   } else if (s.stage === 'postpartum') {
-    parts.push(`Day ${s.daysPostpartum} after ${f.lastBirth?.mode === 'caesarean' ? 'caesarean' : 'birth'}${f.youngest ? `; ${f.youngest.name} ${f.youngest.birthWeightKg} kg at birth` : ''}`);
+    const newborns = f.youngest ? f.children.filter((k) => k.dob.slice(0, 10) === f.youngest!.dob.slice(0, 10)) : [];
+    const older = f.under1000.filter((k) => !newborns.includes(k));
+    situation = `Day ${s.daysPostpartum} after ${f.lastBirth?.mode === 'caesarean' ? 'caesarean' : 'birth'}${newborns.length > 1 ? ` of twins (${newborns.map((k) => `${k.name.split(' ')[0]} ${k.birthWeightKg} kg`).join(', ')} at birth)` : f.youngest ? `, ${f.youngest.name.split(' ')[0]} ${f.youngest.birthWeightKg} kg at birth` : ''}${older.length ? `, also caring for ${older.map((k) => `${k.name.split(' ')[0]} (${babyAge(daysBetween(k.dob, f.asOf))})`).join(' and ')}` : ''}`;
   } else if (s.stage === 'infant' && f.youngest) {
-    parts.push(`${f.youngest.name} is ${babyAge(f.youngestAgeDays!)} old, ${f.youngest.feeding.replace(/_/g, ' ')}`);
+    const others = f.under1000.filter((k) => k.id !== f.youngest!.id);
+    const twin = others.filter((k) => k.dob.slice(0, 10) === f.youngest!.dob.slice(0, 10));
+    const older = others.filter((k) => !twin.includes(k));
+    const feeding = FEEDING_WORDS[f.youngest.feeding] ?? f.youngest.feeding.replace(/_/g, ' ');
+    situation = `${[f.youngest, ...twin].map((k) => k.name.split(' ')[0]).join(' and ')} ${twin.length ? 'are' : 'is'} ${babyAge(f.youngestAgeDays!)} old, ${feeding}${older.length ? `, also caring for ${older.map((k) => `${k.name.split(' ')[0]} (${babyAge(daysBetween(k.dob, f.asOf))})`).join(' and ')}` : ''}`;
   } else {
-    parts.push(`Not pregnant${f.children.length ? `, ${f.children.length} child${f.children.length > 1 ? 'ren' : ''}` : ''}`);
+    situation = `Not pregnant${f.children.length ? `, ${f.children.length} child${f.children.length > 1 ? 'ren' : ''}` : ''}`;
   }
-  const first = `${parts[0]}.`;
+  const sentences = [`${situation}.`];
 
   const top = alerts[0];
   if (top) {
-    const more = alerts.length > 1 ? ` (+${alerts.length - 1} more alert${alerts.length > 2 ? 's' : ''})` : '';
-    return `${first} ${cap(top.finding)}: ${top.short}${more}.`;
+    const more = alerts.length > 1 ? ` (and ${alerts.length - 1} more alert${alerts.length > 2 ? 's' : ''})` : '';
+    sentences.push(`${cap(top.finding)}: ${top.short}${more}.`);
+  } else {
+    const highRisks = s.risks.filter((r) => r.severity === 'urgent' || r.severity === 'high').slice(0, 2);
+    if (highRisks.length) sentences.push(`${highRisks.map((r, i) => (i === 0 ? cap(r.label) : /^[A-Z][a-z]/.test(r.label) ? r.label.charAt(0).toLowerCase() + r.label.slice(1) : r.label)).join(' and ')}.`);
   }
-  const highRisks = s.risks.filter((r) => r.severity === 'urgent' || r.severity === 'high').slice(0, 2);
-  const riskText = highRisks.length ? ` ${highRisks.map((r) => r.label).join('; ')}.` : '';
-  const due = next ? ` Next: ${/^[A-Z][a-z]/.test(next) ? next.charAt(0).toLowerCase() + next.slice(1) : next}.` : '';
-  const silence = f.events.length ? '' : ' No contacts recorded yet.';
-  return `${first}${riskText}${due}${silence}`.trim();
+  if (next) {
+    const diff = daysBetween(f.asOf, next.date);
+    const when = diff === 0 ? 'today' : diff < 0 ? `overdue since ${shortDate(next.date)}` : diff === 1 ? 'tomorrow' : shortDate(next.date);
+    // A child's contact label starts with the child's full name; say the first name once, at the end.
+    const child = f.children.find((k) => next.label.startsWith(`${k.name}: `));
+    const label = child ? `${next.label.slice(child.name.length + 2)} for ${child.name.split(' ')[0]}` : next.label;
+    sentences.push(`Next contact ${when}: ${/^ANC/.test(label) ? label : label.charAt(0).toLowerCase() + label.slice(1)}.`);
+  }
+  if (!f.events.length) sentences.push('No contacts recorded yet.');
+  return sentences.join(' ');
 }
 
 function cap(s: string): string {

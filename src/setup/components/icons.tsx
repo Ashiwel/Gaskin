@@ -37,7 +37,7 @@ const signal = (n: number) => (
 const coins = (n: number) => (
   <>
     {Array.from({ length: n }).map((_, i) => (
-      <ellipse key={i} cx={24} cy={36 - i * 6} rx="12" ry="4" {...S} fill="var(--card, #fff)" />
+      <ellipse key={i} cx={24} cy={36 - i * 6} rx="12" ry="4" {...S} fill="var(--card)" />
     ))}
   </>
 );

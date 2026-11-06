@@ -6,6 +6,7 @@ import type {
   Alert,
   Child,
   ClinicalEvent,
+  ConstraintEvent,
   CountryCode,
   FeedingEvent,
   GrowthEvent,
@@ -29,8 +30,9 @@ import { facilityById } from '../data/directory';
 import { CATALOGUE, SECTION_ORDER, SECTION_TITLES, TEMPLATE_BY_ID, VISIT_TEMPLATES, type CatalogueItem, type VisitTemplate } from './catalogue';
 import { CDC_MILESTONES, WHO_MOTOR_WINDOWS, milestoneSetFor, nextMilestoneSet } from './milestones';
 import { src } from './sources';
-import { renderVisitText } from './text';
-import type { ChecklistItem, ChecklistResult, ChecklistSection, Emit, Finding, FindingSpec, ItemInput, RiskFlags, VisitChecklist, VisitCtx, VisitSection } from './types';
+import { activeItems, enrichItem, TEST_STATUS } from './followups';
+import { referralWhen, renderVisitText } from './text';
+import type { ChecklistItem, ChecklistResult, ChecklistSection, ChecklistSummary, Emit, Finding, FindingSpec, ItemInput, RiskFlags, VisitChecklist, VisitCtx, VisitSection } from './types';
 
 const ANC_WEEKS = [12, 20, 26, 30, 34, 36, 38, 40];
 
@@ -46,15 +48,18 @@ export function dueTemplateId(mother: Mother, asOf: string, childId?: string): s
   }
   const child = childId ? f.children.find((c) => c.id === childId) : f.youngest;
   const age = child ? daysBetween(child.dob, f.asOf) : undefined;
-  if (child && age !== undefined && age >= 0 && age <= 1000) {
-    if (age <= 1) return 'pnc_24h';
-    if (age <= 6) return 'pnc_day3';
-    if (age <= 41) return 'pnc_day7_14';
-    if (age < 63) return 'pnc_6wk';
-    const tpl = [...VISIT_TEMPLATES].reverse().find((t) => t.stage === 'infant' && t.ageDays !== undefined && t.ageDays <= age + 14);
-    return tpl?.id ?? 'child_10wk';
-  }
+  if (child && age !== undefined && age >= 0 && age <= 1000) return childTemplateId(age);
   return 'preconception';
+}
+
+/** The visit template for a child of this age (days), whatever the mother's own stage. */
+export function childTemplateId(age: number): string {
+  if (age <= 1) return 'pnc_24h';
+  if (age <= 6) return 'pnc_day3';
+  if (age <= 41) return 'pnc_day7_14';
+  if (age < 63) return 'pnc_6wk';
+  const tpl = [...VISIT_TEMPLATES].reverse().find((t) => t.stage === 'infant' && t.ageDays !== undefined && t.ageDays <= age + 14);
+  return tpl?.id ?? 'child_10wk';
 }
 
 // ---------- Context ----------
@@ -83,7 +88,7 @@ function riskFlags(f: Facts, babies: Child[]): RiskFlags {
     previousCaesarean: m.previousCaesarean,
     caesareanBirth: f.lastBirth?.mode === 'caesarean',
     vaginalBirth: !!f.lastBirth && f.lastBirth.mode !== 'caesarean',
-    twins: (f.pregnant && (m.pregnancy?.fetuses ?? 1) > 1) || babies.length > 1,
+    twins: (f.pregnant && (m.pregnancy?.fetuses ?? 1) > 1) || babies.some((b, i) => babies.some((o, j) => j !== i && o.dob.slice(0, 10) === b.dob.slice(0, 10))),
     hypertension: hasCondition(f, 'chronic_hypertension', 'pre_eclampsia_history'),
     diabetes: hasCondition(f, 'diabetes_preexisting', 'gestational_diabetes'),
     anaemia: hasCondition(f, 'anaemia') || (hb !== undefined && hb < (f.pregnant ? 11 : 12)),
@@ -525,6 +530,7 @@ function nextVisit(c: VisitCtx, plans: Map<string, VaccinePlan>): VisitChecklist
 
 export interface BuildOptions {
   visitTemplateId?: string;
+  /** Only this child (and a twin born the same day). Without it, every child under 1,000 days is covered. */
   childId?: string;
   /** Override the facility referrals go to */
   referralFacilityId?: string;
@@ -537,29 +543,37 @@ export function buildVisitChecklist(mother: Mother, asOf: string, opts: BuildOpt
   if (!template) throw new Error(`Unknown visit template: ${templateId}`);
   const fill = PLACEHOLDERS(mother.country);
 
-  // Babies: the requested child, or the youngest, plus a twin born the same day.
+  // Babies: the requested child (plus a twin born the same day), or every child under 1,000 days.
+  // The child the template is about (the youngest, or the one asked for) uses that template; every
+  // other child gets the visit due for her own age, so one visit covers every child.
   let babies: Child[] = [];
+  let anchorDob: string | undefined;
+  const anchor = opts.childId ? f.children.find((c) => c.id === opts.childId) : f.youngest;
   if (template.includesBaby) {
-    const anchor = opts.childId ? f.children.find((c) => c.id === opts.childId) : f.youngest;
-    if (anchor) babies = f.children.filter((c) => c.dob.slice(0, 10) === anchor.dob.slice(0, 10));
+    if (anchor) anchorDob = anchor.dob.slice(0, 10);
     else if (template.stage === 'birth' || template.stage === 'postpartum') {
       babies = [{ id: 'newborn', name: 'Baby', sex: 'F', dob: f.asOf, birthWeightKg: 0, gestationAtBirthWeeks: 40, feeding: 'exclusive_breastfeeding' }];
     }
   }
+  if (opts.childId && anchor) babies = f.children.filter((c) => c.dob.slice(0, 10) === anchor.dob.slice(0, 10));
+  else if (!babies.length) babies = [...f.under1000].reverse(); // youngest first
+  if (anchorDob && !babies.some((b) => b.dob.slice(0, 10) === anchorDob) && anchor) babies.unshift(...f.children.filter((c) => c.dob.slice(0, 10) === anchorDob));
+  const templateFor = (b: Child): VisitTemplate =>
+    b.id === 'newborn' || (template.includesBaby && b.dob.slice(0, 10) === anchorDob) ? template : TEMPLATE_BY_ID[childTemplateId(daysBetween(b.dob, f.asOf))];
 
   const done = doneBefore(f);
   const skipped: VisitChecklist['skipped'] = [];
   const items: ChecklistItem[] = [];
-  const motherCtx = makeCtx(mother, f, template, babies, babies[0]);
+  const motherCtx = makeCtx(mother, f, template, babies, template.includesBaby ? babies.find((b) => templateFor(b) === template) : undefined);
   const plans = new Map<string, VaccinePlan>();
 
-  const babyCtxs = babies.map((b) => (b === babies[0] ? motherCtx : makeCtx(mother, f, template, babies, b)));
+  const babyCtxs = babies.map((b) => (motherCtx.child === b ? motherCtx : makeCtx(mother, f, templateFor(b), babies, b)));
   for (const ci of CATALOGUE) {
     const ctxs = ci.subject === 'baby' ? babyCtxs : [motherCtx];
     for (const c of ctxs) {
       if (ci.subject === 'baby' && !c.child) continue;
       if (!ci.when(c)) continue;
-      const it = itemFrom(ci, c, fill);
+      const it = enrichItem(itemFrom(ci, c, fill));
       const skip = ci.skipIf?.(c) ?? (ci.once && done.has(it.id) ? 'Checked at an earlier visit' : undefined);
       if (skip) {
         skipped.push({ id: it.id, title: it.title, reason: skip });
@@ -574,10 +588,10 @@ export function buildVisitChecklist(mother: Mother, asOf: string, opts: BuildOpt
     const c = babyCtxs[bi];
     const plan = vaccinePlan(f, b, mother.country);
     plans.set(b.id, plan);
-    items.push(...vaccineItems(c, plan));
+    items.push(...vaccineItems(c, plan).map(enrichItem));
     for (const d of plan.deferred) skipped.push({ id: `d.vaccine.${vaccineKey(d.code)}@${b.id}`, title: `${vaccineList([d.code])} (${b.name})`, reason: d.reason });
-    if (template.stage === 'infant' || template.id === 'pnc_6wk') items.push(...milestoneItems(c, done, skipped));
-    items.push(...tellExtras(c, plan));
+    if (c.template.stage === 'infant' || c.template.id === 'pnc_6wk') items.push(...milestoneItems(c, done, skipped));
+    items.push(...tellExtras(c, plan).map(enrichItem));
   }
 
   // Td for the mother is a vaccine: put the dose code on the item.
@@ -613,7 +627,15 @@ export function buildVisitChecklist(mother: Mother, asOf: string, opts: BuildOpt
   const sections: ChecklistSection[] = SECTION_ORDER.map((id) => ({ id, title: SECTION_TITLES[id], items: ordered.filter((i) => i.section === id) })).filter((s) => s.items.length > 0);
 
   const personalisation = [...new Set(ordered.flatMap((i) => (i.because?.length ? [`${i.because.join(', ')}: ${i.title.charAt(0).toLowerCase()}${i.title.slice(1)}`] : [])))];
-  if (babies.length > 1) personalisation.unshift(`Twins: every baby check is repeated for ${babies.map((b) => b.name).join(' and ')}`);
+  const dobGroups = new Map<string, Child[]>();
+  for (const b of babies) if (b.id !== 'newborn') dobGroups.set(b.dob.slice(0, 10), [...(dobGroups.get(b.dob.slice(0, 10)) ?? []), b]);
+  const others: string[] = [];
+  for (const group of dobGroups.values()) {
+    if (group.length > 1) personalisation.unshift(`Twins: every baby check is repeated for ${group.map((b) => b.name).join(' and ')}`);
+    const t = templateFor(group[0]);
+    if (t !== template) others.push(`${group.map((b) => b.name.split(' ')[0]).join(' and ')} (${t.label.toLowerCase()})`);
+  }
+  if (others.length) personalisation.unshift(`Also covers ${others.join('; ')}: checks for each child are grouped by name`);
 
   const context: string[] = [];
   if (f.pregnant && f.ga !== undefined) context.push(`${f.ga} weeks pregnant`, `G${mother.gravida} P${mother.parity}`);
@@ -637,11 +659,16 @@ export function buildVisitChecklist(mother: Mother, asOf: string, opts: BuildOpt
     children: babies.map((b) => {
       const age = daysBetween(b.dob, f.asOf);
       const corrected = b.gestationAtBirthWeeks < 37 && age < 730 ? Math.max(0, age - (40 - b.gestationAtBirthWeeks) * 7) : undefined;
-      return { id: b.id, name: b.name, ageDays: age, ageLabel: babyAge(age), correctedAgeDays: corrected };
+      const t = templateFor(b);
+      return { id: b.id, name: b.name, ageDays: age, ageLabel: babyAge(age), correctedAgeDays: corrected, templateId: t.id, templateLabel: t.label };
     }),
     context,
     personalisation,
     sections,
+    bySubject: [
+      { childId: undefined, title: 'Mother', sections: SECTION_ORDER.map((id) => ({ id, title: SECTION_TITLES[id], items: ordered.filter((i) => i.section === id && !i.childId) })).filter((x) => x.items.length > 0) },
+      ...babies.map((b) => ({ childId: b.id, title: b.name, sections: SECTION_ORDER.map((id) => ({ id, title: SECTION_TITLES[id], items: ordered.filter((i) => i.section === id && i.childId === b.id) })).filter((x) => x.items.length > 0) })),
+    ].filter((g) => g.sections.length > 0),
     items: ordered,
     skipped,
     nextVisit: next,
@@ -717,7 +744,7 @@ export function findingsFor(item: ChecklistItem, r: ChecklistResult): FindingSpe
 /** Every abnormal finding in the recorded answers, most urgent first. */
 export function evaluateFindings(checklist: VisitChecklist, results: Record<string, ChecklistResult>): Finding[] {
   const out: Finding[] = [];
-  for (const item of checklist.items) {
+  for (const item of activeItems(checklist, results)) {
     const r = results[item.id];
     if (!r || !isItemActive(item, checklist, results)) continue;
     for (const spec of findingsFor(item, r)) {
@@ -772,8 +799,8 @@ export function referralAlerts(mother: Mother, asOf: string): Alert[] {
         reason: `Found at the visit on ${shortDate(r.at)}${r.childId && names.get(r.childId) ? ` (${names.get(r.childId)})` : ''}.`,
         sources: [],
         subject: r.childId ? 'child' : 'mother',
-        motherTextKey: r.urgency === 'emergency' ? 'vt.refer_now' : 'vt.refer_today',
-        motherTextParams: { place },
+        motherTextKey: r.urgency === 'emergency' ? 'vt.refer_now' : r.urgency === 'urgent' ? 'vt.refer_today' : 'vt.refer_within',
+        motherTextParams: (r.urgency === 'routine' ? { place, when: referralWhen(r.note) ?? 'soon' } : { place }) as Record<string, string>,
       } satisfies Alert;
     });
 }
@@ -795,7 +822,8 @@ export function checklistToEvents(checklist: VisitChecklist, results: Record<str
   let n = 0;
   const id = () => `${base}-${++n}`;
   const events: ClinicalEvent[] = [];
-  const active = checklist.items.filter((i) => results[i.id] && results[i.id].status !== 'not_checked' && isItemActive(i, checklist, results));
+  const all = activeItems(checklist, results);
+  const active = all.filter((i) => results[i.id] && results[i.id].status !== 'not_checked' && isItemActive(i, checklist, results));
   const realChild = (cid?: string) => (cid && cid !== 'newborn' ? cid : undefined);
 
   // Visit
@@ -810,7 +838,7 @@ export function checklistToEvents(checklist: VisitChecklist, results: Record<str
     visitType: checklist.visitType,
     contactNumber: checklist.contactNumber,
     attended: true,
-    note: `checklist:${checklist.templateId}|answered:${active.length}/${checklist.items.length}|told:${told}${book?.date ? `|next:${book.date}` : checklist.nextVisit ? `|next:${checklist.nextVisit.date}` : ''}|done:${doneIds.join(',')}`,
+    note: `checklist:${checklist.templateId}|answered:${active.length}/${all.length}|told:${told}${book?.date ? `|next:${book.date}` : checklist.nextVisit ? `|next:${checklist.nextVisit.date}` : ''}|done:${doneIds.join(',')}`,
   } as VisitEvent);
 
   // Vitals: mother, then each baby
@@ -866,6 +894,30 @@ export function checklistToEvents(checklist: VisitChecklist, results: Record<str
     if (vaccines.length) events.push({ id: id(), kind: 'immunisation', at, recordedBy: workerId, childId, vaccines } as ImmunisationEvent);
   }
 
+  // Constraints: tests not done, and reasons she could not follow a recommendation.
+  for (const i of active) {
+    const r = results[i.id];
+    const suffix = i.childId ? `@${i.childId}` : '';
+    const sub = (base: string) => results[`${base}${suffix}`];
+    let reason: ConstraintEvent['reason'] | undefined;
+    let temporary: boolean | undefined;
+    if (i.isTest && (r.status === 'not_available' || r.status === 'declined' || r.status === 'not_done_today')) {
+      reason = TEST_STATUS[r.status].reason;
+      temporary = TEST_STATUS[r.status].temporary;
+    } else if (i.constraintOn && r.choice && i.constraintOn[r.choice] && !i.isTest) {
+      reason = i.constraintOn[r.choice];
+    }
+    if (!reason || !i.constraintTarget) continue;
+    const ev: ConstraintEvent = { id: id(), kind: 'constraint', at, recordedBy: workerId, itemId: i.constraintTarget, reason, ...(temporary ? { temporary } : {}), ...(realChild(i.childId) ? { childId: realChild(i.childId) } : {}) };
+    if (reason === 'declined') ev.declinedReason = (sub(`${i.baseId}.fu.declined_why`)?.choice as ConstraintEvent['declinedReason']) ?? 'other';
+    if (reason === 'side_effects') {
+      const sev = sub(`${i.baseId}.fu.se_severity`)?.choice as 'mild' | 'moderate' | 'severe' | undefined;
+      ev.sideEffect = { symptoms: sub(`${i.baseId}.fu.se_symptoms`)?.choices ?? [], severity: sev ?? 'mild' };
+    }
+    if (r.note) ev.note = r.note;
+    events.push(ev);
+  }
+
   // Symptoms and referrals from findings
   const findings = evaluateFindings(checklist, results);
   const bySubject = new Map<string, Finding[]>();
@@ -899,6 +951,63 @@ export function checklistToEvents(checklist: VisitChecklist, results: Record<str
     }
   }
   return events;
+}
+
+// ---------- Visit summary ----------
+
+const UNKNOWN_CONSEQUENCE: Record<string, string> = {
+  'd.urine_protein': 'Pre-eclampsia cannot be ruled out without urine protein when BP is raised.',
+  'd.hb': 'Anaemia cannot be ruled out; with pallor or breathlessness, refer for the test today.',
+  'd.rdt': 'Malaria cannot be ruled out in a fever; refer for the test today.',
+  'd.hiv': 'HIV status unknown: the baby cannot be protected from transmission.',
+  'd.syphilis': 'Syphilis unknown: untreated syphilis can cause stillbirth.',
+  'd.glucose': 'Diabetes in pregnancy cannot be ruled out.',
+};
+
+/**
+ * What the summary screen shows: findings, rechecks, unanswered items (important ones flagged),
+ * tests with no result and what that means, and recommendations with guides to open.
+ */
+export function summariseChecklist(checklist: VisitChecklist, results: Record<string, ChecklistResult>): ChecklistSummary {
+  const items = activeItems(checklist, results).filter((i) => isItemActive(i, checklist, results));
+  const abnormal = evaluateFindings(checklist, results);
+  const rechecks = abnormal.filter((x) => x.action === 'recheck').map((x) => ({ itemId: x.itemId, label: x.childName ? `${x.childName}: ${x.label}` : x.label }));
+  const label = (i: ChecklistItem) => (i.childName && checklist.children.length > 1 ? `${i.childName}: ${i.title}` : i.title);
+  const unanswered = items
+    .filter((i) => !results[i.id] && i.section !== 'tell')
+    .map((i) => ({ itemId: i.id, label: label(i), important: i.priority <= 2 || !!i.isTest || /danger/.test(i.baseId) }));
+  // BP raised at this visit makes a missing urine test an emergency of knowledge, not a formality.
+  const bpItem = items.find((i) => i.input.kind === 'bp');
+  const bpRes = bpItem ? results[bpItem.id] : undefined;
+  const bpHigh = !!bpRes && ((bpRes.value ?? 0) >= 140 || (bpRes.value2 ?? 0) >= 90);
+  const pale = items.some((i) => i.baseId === 'm.pallor' && results[i.id]?.status === 'abnormal');
+  const tempItem = items.find((i) => i.baseId === 'm.temp');
+  const febrile = !!tempItem && (results[tempItem.id]?.value ?? 0) >= 38;
+  const unknowns: ChecklistSummary['unknowns'] = [];
+  for (const i of items.filter((x) => x.isTest)) {
+    const r = results[i.id];
+    const status = !r ? 'unanswered' : r.status === 'not_available' || r.status === 'declined' || r.status === 'not_done_today' ? r.status : undefined;
+    if (!status) continue;
+    const referToday = (i.baseId === 'd.urine_protein' && bpHigh) || (i.baseId === 'd.hb' && pale) || (i.baseId === 'd.rdt' && febrile);
+    unknowns.push({ itemId: i.id, label: label(i), status, consequence: `${UNKNOWN_CONSEQUENCE[i.baseId] ?? 'The result is unknown, not normal.'}${referToday ? ' Refer for this test today.' : ' Do it at the next visit.'}`, referToday });
+  }
+  const recommendations: ChecklistSummary['recommendations'] = [];
+  for (const f of abnormal) recommendations.push({ text: `${f.childName ? `${f.childName}: ` : ''}${f.todo}`, itemId: f.itemId, guideId: guideForFinding(f) });
+  for (const u of unknowns.filter((x) => x.referToday)) recommendations.push({ text: `Refer for ${u.label.toLowerCase()} today.`, itemId: u.itemId });
+  for (const i of items) if (i.guideId && i.section === 'tell' && !recommendations.some((r) => r.guideId === i.guideId)) recommendations.push({ text: `Open the guide: ${i.title}`, guideId: i.guideId, itemId: i.id });
+  const perChild = checklist.children.map((c) => {
+    const mine = items.filter((i) => i.childId === c.id);
+    return { childId: c.id, name: c.name, answered: mine.filter((i) => results[i.id]).length, total: mine.length, findings: abnormal.filter((x) => x.childId === c.id).length };
+  });
+  return { abnormal, rechecks, unanswered, unknowns, recommendations, perChild };
+}
+
+function guideForFinding(f: Finding): string | undefined {
+  if (f.symptom === 'low_mood' || f.symptom === 'thoughts_of_self_harm' || /epds/i.test(f.label)) return 'thinking_healthy';
+  if (/latch|feed|milk/i.test(f.label)) return 'breastfeeding_positions';
+  if (/low birth weight|kangaroo/i.test(f.label)) return 'kangaroo_care';
+  if (/transport/i.test(f.label)) return 'birth_preparedness';
+  return undefined;
 }
 
 export { CDC_MILESTONES };

@@ -1,0 +1,173 @@
+/*
+  Gaskin stylesheet entry (Tailwind CSS v4, build time only).
+
+  Layers, lowest to highest: theme (tokens) < base (preflight, dark-mode tokens, body) <
+  components (the legacy screen CSS in src/index.css, until each screen is redesigned) < utilities.
+*/
+@layer theme, base, components, utilities;
+@import 'tailwindcss/theme.css' layer(theme);
+@import 'tailwindcss/preflight.css' layer(base);
+@import './theme.css';
+@import './fonts.css';
+@import '../index.css' layer(components);
+@import 'tailwindcss/utilities.css' layer(utilities);
+
+@plugin 'tailwindcss-react-aria-components';
+@plugin 'tailwindcss-animate';
+
+/* Untitled UI dark mode: the ThemeProvider toggles `.dark-mode` on <html>. A `.dark-mode` element
+   inside the page (the #design showcase) also works, for side-by-side review. */
+@custom-variant dark (&:where(.dark-mode, .dark-mode *));
+@custom-variant label (& [data-label]);
+@custom-variant focus-input-within (&:has(input:focus));
+
+@utility scrollbar-hide {
+  &::-webkit-scrollbar {
+    display: none;
+    -webkit-appearance: none;
+  }
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+@utility transition-inherit-all {
+  transition-property: inherit;
+  transition-duration: inherit;
+  transition-timing-function: inherit;
+}
+/* Tabular figures for columns of numbers (tables, axes). Big standalone figures stay proportional. */
+@utility tnum {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Legacy utility names used by the screens before the redesign (bg-paper, text-ink-2...). They map
+   to semantic tokens through src/index.css. New code uses bg-primary, text-secondary and so on. */
+@theme inline {
+  --color-paper: var(--paper);
+  --color-paper-sunk: var(--paper-sunk);
+  --color-card: var(--card);
+  --color-raised: var(--raised);
+  --color-ink: var(--ink);
+  --color-ink-2: var(--ink-2);
+  --color-ink-3: var(--ink-3);
+  --color-line: var(--line);
+  --color-line-2: var(--line-2);
+  --color-clay: var(--clay);
+  --color-clay-ink: var(--clay-ink);
+  --color-clay-soft: var(--clay-soft);
+  --color-green: var(--green);
+  --color-green-soft: var(--green-soft);
+  --color-amber: var(--amber);
+  --color-amber-soft: var(--amber-soft);
+  --color-red: var(--red);
+  --color-red-soft: var(--red-soft);
+  --color-red-ink: var(--red-ink);
+  --color-banner: var(--banner);
+  --color-banner-ink: var(--banner-ink);
+  --color-focus: var(--focus);
+  --font-serif: var(--font-body);
+  --radius-s: var(--r-s);
+  --radius-m: var(--r-m);
+  --radius-l: var(--r-l);
+  --shadow-soft: var(--shadow);
+}
+
+@layer base {
+  html {
+    background-color: var(--color-bg-primary);
+    color: var(--color-text-primary);
+  }
+  html,
+  body {
+    font-family: var(--font-body);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    font-variant-ligatures: contextual;
+    font-kerning: normal;
+    /* Inter: single-storey a off, tabular digits off, the disambiguated l/I on (cv05). */
+    font-feature-settings: 'cv11' 0;
+  }
+  body {
+    background-color: var(--color-bg-primary);
+    color: var(--color-text-primary);
+  }
+  /* Text areas, inputs and selects inherit the theme everywhere, so none stays light in dark mode. */
+  input,
+  select,
+  textarea,
+  button {
+    color: inherit;
+  }
+  input:not([type='checkbox']):not([type='radio']):not([type='range']),
+  select,
+  textarea {
+    background-color: var(--color-bg-primary);
+  }
+  ::placeholder {
+    color: var(--color-text-placeholder);
+    opacity: 1;
+  }
+  details summary::-webkit-details-marker {
+    display: none;
+  }
+  input::-webkit-outer-spin-button,
+  input::-webkit-inner-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+  }
+  input[type='number'] {
+    -moz-appearance: textfield;
+  }
+  input[type='search']::-webkit-search-cancel-button {
+    -webkit-appearance: none;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+}
+
+/* Compatibility for the legacy screens under Tailwind preflight (remove once all are redesigned):
+   lists keep their bullets, headings keep their browser sizes, inline icons stay inline. */
+@layer components {
+  :where(ul, ol):not([class]) {
+    list-style: revert;
+    padding-inline-start: 1.25em;
+  }
+  :where(h1, h2, h3, h4):not([class]) {
+    font-size: revert;
+  }
+  :where(.main, .sheet, .setup-root) :where(svg) {
+    display: inline-block;
+  }
+}
+
+/* Line charts draw in once (skipped under reduced motion by the component). */
+@keyframes gaskin-draw {
+  from {
+    stroke-dashoffset: 1;
+  }
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+/* Animated border trail (Animata, MIT): the angle animates around a conic gradient. */
+@property --border-trail-angle {
+  syntax: '<angle>';
+  initial-value: 0deg;
+  inherits: false;
+}
+@keyframes border-trail {
+  0% {
+    --border-trail-angle: 0deg;
+  }
+  100% {
+    --border-trail-angle: 360deg;
+  }
+}

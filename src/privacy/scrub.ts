@@ -46,7 +46,11 @@ export type Placeholder =
   | '[FACILITY]'
   | '[REGION]'
   | '[DATE]'
-  | '[EMERGENCY_LINE]';
+  | '[EMERGENCY_LINE]'
+  /** Another facility (a referral hospital, a neighbouring clinic): never restored as her own clinic */
+  | '[OTHER_FACILITY]'
+  /** Another mother's community or another place: never restored as her own community */
+  | '[PLACE]';
 
 export interface ScrubTerm {
   original: string;
@@ -286,10 +290,15 @@ export function scrubText(input: string, terms: ScrubTerm[], opts: ScrubOptions 
 
   // 6. Facility-shaped names
   // A bare keyword ("Clinic", "the General Hospital") is not identifying; a named one is
-  sub(FACILITY_RE, (m) => (BARE_FACILITY_RE.test(m.trim()) ? m : '[FACILITY]'), 'facility');
+  // A facility found only by its shape is not known to be hers, so it must never be restored as her clinic
+  // ("go to [FACILITY]" coming back as her health post instead of the referral hospital). Only a match that
+  // grew out of her own facility's known name ("[FACILITY] PHC") keeps [FACILITY].
+  const facilityPh = (m: string) => (/\[FACILITY\]/.test(m) ? '[FACILITY]' : '[OTHER_FACILITY]');
+  sub(FACILITY_RE, (m) => (BARE_FACILITY_RE.test(m.trim()) ? m : facilityPh(m)), 'facility');
   sub(HOSP_NUMBER_RE, () => '[ID]', 'ID number');
-  sub(FACILITY_ABBR_RE, () => '[FACILITY]', 'facility');
+  sub(FACILITY_ABBR_RE, (m) => facilityPh(m), 'facility');
   text = text.replace(/\[FACILITY\](?:[ \t]*\[FACILITY\])+/g, '[FACILITY]');
+  text = text.replace(/\[OTHER_FACILITY\](?:[ \t]*\[OTHER_FACILITY\])+/g, '[OTHER_FACILITY]');
 
   // 7. Exact ages -> five-year bands (keep the adolescent flag)
   const band = (n: number) => `${ageBand(n)} years${n < 18 ? ' (adolescent, under 18)' : ''}`;
@@ -308,6 +317,26 @@ export function scrubText(input: string, terms: ScrubTerm[], opts: ScrubOptions 
   }
 
   return { text, removed: [...removed] };
+}
+
+/**
+ * Facility names written in this text (named hospitals and clinics, not bare words such as
+ * "the clinic"), minus the ones to ignore. Used to restore a referral hospital locally when the
+ * source named exactly one, so [OTHER_FACILITY] never turns into her own health post.
+ */
+export function facilityNamesIn(text: string, ignore: string[] = []): string[] {
+  const skip = ignore.filter(Boolean).map((x) => x.trim().toLowerCase());
+  const out: string[] = [];
+  for (const re of [FACILITY_RE, FACILITY_ABBR_RE]) {
+    for (const m of (text ?? '').matchAll(new RegExp(re.source, re.flags))) {
+      const name = m[0].trim().replace(/^(?:the|of|at|to)\s+/i, '');
+      if (!name || BARE_FACILITY_RE.test(name) || /\[[A-Z_]+\]/.test(name)) continue;
+      const low = name.toLowerCase();
+      if (skip.some((x) => x.includes(low) || low.includes(x))) continue;
+      if (!out.some((o) => o.toLowerCase().includes(low) || low.includes(o.toLowerCase()))) out.push(name);
+    }
+  }
+  return out;
 }
 
 /**

@@ -94,6 +94,13 @@ describe('danger-sign alerts', () => {
     expect(plan.summary).toMatch(/166\/112/);
   });
 
+  it('summary is plain sentences with the next contact said once', () => {
+    const plan = buildPlan(makeMother({ pregnancy: { lmp: LMP_28, fetuses: 1 }, events: [ev<VitalsEvent>({ kind: 'vitals', at: `${TODAY}T09:00:00Z`, systolic: 110, diastolic: 70 })] }), TODAY, ctx);
+    expect(plan.summary.match(/Next/g)?.length ?? 0).toBeLessThanOrEqual(1);
+    expect(plan.summary).not.toMatch(/;|Next:/);
+    if (plan.nextContact) expect(plan.summary).toMatch(/Next contact [^.]+: [^.]+\.$/);
+  });
+
   it('BP 148/96 alone is urgent hypertension, not pre-eclampsia', () => {
     const m = makeMother({
       pregnancy: { lmp: LMP_28, fetuses: 1 },
@@ -294,6 +301,30 @@ describe('overrides and learned rules', () => {
     expect(item.overriddenBy).toBeUndefined();
   });
 
+  it('security: a locked item cannot be rewritten or hidden by a modify override (SEC-02)', () => {
+    const before = buildPlan(preg(), TODAY, { overrides: [], learnedRules: [] }).items.find((i) => i.id === 'danger.pregnancy')!;
+    const p = buildPlan(preg(), TODAY, {
+      overrides: [ov({ action: 'modify', item: { title: 'Nothing to worry about', motherText: 'It is normal. Stay at home.', status: 'removed', priority: 5 } as Override['item'] })],
+      learnedRules: [],
+    });
+    const item = p.items.find((i) => i.id === 'danger.pregnancy')!;
+    expect(item.status).toBe('active');
+    expect(item.title).toBe(before.title);
+    expect(item.motherText).toBe(before.motherText);
+    expect(item.priority).toBe(before.priority);
+    expect(item.overriddenBy).toBeUndefined();
+  });
+
+  it('security: a modify override never removes an unlocked item either (removal is its own action)', () => {
+    const p = buildPlan(preg(), TODAY, {
+      overrides: [ov({ itemId: 'activity.pregnancy', action: 'modify', item: { title: 'Gentle walks', status: 'removed' } as Override['item'] })],
+      learnedRules: [],
+    });
+    const it2 = p.items.find((i) => i.id === 'activity.pregnancy')!;
+    expect(it2.title).toBe('Gentle walks');
+    expect(it2.status).toBe('active');
+  });
+
   it('an unlocked item can be removed', () => {
     const p = buildPlan(preg(), TODAY, { overrides: [ov({ itemId: 'activity.pregnancy' })], learnedRules: [] });
     expect(p.items.find((i) => i.id === 'activity.pregnancy')?.status).toBe('removed');
@@ -459,8 +490,10 @@ describe('referrals from guided visits', () => {
     expect(a).toBeDefined();
     expect(a!.level).toBe('warning');
     expect(a!.subject).toBe('child');
-    expect(a!.motherTextKey).toBe('vt.finding.clubfoot');
-    expect(a!.motherText).toMatch(/Ayo’s foot is turned in/);
+    // Routine finding: the mother line names the place and the timing, never "today" or "now"
+    expect(a!.motherTextKey).toBe('vt.refer_within');
+    expect(a!.motherText).toMatch(/^Please go to .+ within 2 weeks\. It is not an emergency/);
+    expect(a!.motherText).not.toMatch(/today|now/i);
     // Closed referrals stop alerting
     const closed = buildPlan({ ...mother, events: [birth, { ...referral, status: 'arrived' as const }] }, TODAY, ctx);
     expect(closed.alerts.some((x) => x.id.startsWith('alert.visit_referral.'))).toBe(false);

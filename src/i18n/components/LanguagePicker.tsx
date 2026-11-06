@@ -94,7 +94,11 @@ function PackRow({ p, uiLang, selected, multiple, onToggle, onInstall, error }: 
     <li className={`i18n-pack${selected ? ' is-selected' : ''}`}>
       <button type="button" className="i18n-pack-main" role={multiple ? 'checkbox' : 'radio'} aria-checked={selected} onClick={onToggle}>
         <span className="i18n-pack-tick" aria-hidden="true">
-          {selected ? '✓' : ''}
+          {selected ? (
+            <svg viewBox="0 0 12 12" width="10" height="10" aria-hidden="true">
+              <path d="M2.5 6.2 5 8.5l4.5-5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          ) : null}
         </span>
         <span className="i18n-pack-names">
           <span className="i18n-pack-native" dir={p.direction} lang={p.code}>
@@ -102,11 +106,11 @@ function PackRow({ p, uiLang, selected, multiple, onToggle, onInstall, error }: 
           </span>
           {p.nativeName !== p.name ? <span className="i18n-pack-english">{p.name}</span> : null}
         </span>
-        <span className={`i18n-status i18n-status--${p.status}`}>{t(`pack.status.${p.status}`, uiLang)}</span>
+        <span className={`i18n-status i18n-status--${p.status}`}>{p.status === 'none' && p.code !== 'en' ? 'Coming soon' : t(`pack.status.${p.status}`, uiLang)}</span>
       </button>
       <div className="i18n-pack-meta">
         <span>{formatBytes(p.sizeBytes)}</span>
-        {p.code !== 'en' ? <span>{t('pack.coverage', uiLang, { pct: motherPct })}</span> : null}
+        {p.status === 'none' && p.code !== 'en' ? <span>{t('pack.status.none', uiLang)}</span> : p.code !== 'en' ? <span>{t('pack.coverage', uiLang, { pct: motherPct })}</span> : null}
         {p.direction === 'rtl' ? <span>{t('pack.rtl', uiLang)}</span> : null}
         <span className="i18n-pack-action">
           {progress !== undefined ? (

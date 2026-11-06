@@ -8,3 +8,8 @@ export { TRADITIONAL_PRACTICES, findPractice } from './traditional';
 export { COUNTRY_RULES } from './countryRules';
 export type { CountryRules } from './countryRules';
 export { MOTHER_TEXT, renderMotherText } from './motherText';
+export { PLAN_TEXT, HOW_TO, howToFor, renderPlanText } from './planText';
+export { SIDE_EFFECTS, sideEffectGroup, ADVERSE_EVENT_REPORTING } from './sideEffects';
+export type { SideEffectGroup, SideEffectSpec, SideEffectSymptom } from './sideEffects';
+export { GUIDES } from './guides';
+export type { Guide } from './guides';

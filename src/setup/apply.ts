@@ -4,7 +4,7 @@
  * The wizard calls this from the "Set it up" button. Storage goes first because choosing
  * a folder needs the button press (browsers only open the folder picker from a click).
  */
-import { configureAI, type AISettings } from '../ai';
+import { configureAI, saveAISettings, type AISettings } from '../ai';
 import { installPack, isPackCode } from '../i18n';
 import { buildLocationProfile, saveLocationProfile, type LocationProfile } from '../location';
 import { getAppStore, type GaskinStore } from '../storage';
@@ -47,11 +47,9 @@ export interface ApplyResult {
 }
 
 function persistAI(s: AISettings) {
-  try {
-    globalThis.localStorage?.setItem(AI_SETTINGS_KEY, JSON.stringify(s));
-  } catch {
-    /* ignore */
-  }
+  // Through the AI layer, so the worker's choice of where her key is kept (device, tab or memory) is honoured
+  saveAISettings(s);
+  void AI_SETTINGS_KEY;
 }
 
 export async function applySetupPlan(plan: SetupPlan, answers: SetupAnswers, opts: ApplyOptions = {}): Promise<ApplyResult> {

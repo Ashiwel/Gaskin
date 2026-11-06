@@ -167,6 +167,7 @@ function proposals(): RuleProposal[] {
       supportingWorkerIds: ['w-ng-folasade', 'w-ng-zainab'],
       status: 'pending',
       createdAt: iso(2, 13, 5),
+      createdBy: 'w-ng-folasade',
     },
     {
       id: 'prop.ov-003',
@@ -182,6 +183,7 @@ function proposals(): RuleProposal[] {
       reviewedBy: 'w-ng-bankole',
       reviewNote: 'Agree. Consistent with WHO 2025 SCD-in-pregnancy guidance on avoiding crisis triggers. Approved for all pregnant women with SCD; keep priority 2.',
       createdAt: iso(48, 12, 0),
+      createdBy: 'w-ng-bisola',
       reviewedAt: iso(41, 16, 30),
     },
     {
@@ -197,6 +199,7 @@ function proposals(): RuleProposal[] {
       reviewedBy: 'w-ng-bankole',
       reviewNote: 'Evidence supports binders after caesarean for comfort; neutral after vaginal birth. Not removing without more cases. Please collect feedback.',
       createdAt: iso(30, 10, 0),
+      createdBy: 'w-ng-kemi',
       reviewedAt: iso(27, 9, 15),
     },
   ];
@@ -265,6 +268,9 @@ function outbound(mothers: Mother[]): OutboundMessage[] {
       itemIds: m.itemIds,
       aiAssisted: m.ai,
       reviewedBy: m.reviewedBy,
+      // Every message records who drafted it and who sent it (the assigned worker unless reviewed by another).
+      createdBy: m.reviewedBy ?? mothers.find((x) => x.id === m.motherId)?.assignedWorkerId,
+      sentBy: m.status === 'draft' || m.status === 'queued' ? undefined : (m.reviewedBy ?? mothers.find((x) => x.id === m.motherId)?.assignedWorkerId),
     };
   });
 }

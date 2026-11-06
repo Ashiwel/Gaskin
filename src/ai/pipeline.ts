@@ -17,6 +17,9 @@ import {
   checkOutbound,
   collectTerms,
   deidentify,
+  facilityNamesIn,
+  getPrivacyDirectory,
+  otherFacilitiesIn,
   recordAICall,
   reidentify,
   rememberMother,
@@ -126,6 +129,25 @@ function withDefaults(map: ReidentifyMap): ReidentifyMap {
   return { '[WORKER]': 'your health worker', '[FACILITY]': 'your clinic', '[COMMUNITY]': 'your community', ...map };
 }
 
+/**
+ * The one other facility the source text names (her referral hospital), so the reply can say it.
+ * With none or several, [OTHER_FACILITY] stays a placeholder and the guardrails send the template instead.
+ */
+function otherFacility(sourceText: string, mother: Mother | undefined, facilityName: string | undefined): string | undefined {
+  const own = facilityName ?? getPrivacyDirectory().facilities?.find((f) => f.id === mother?.facilityId)?.name;
+  // Known facilities by their exact name first; the shape-based finder only when none is known
+  const known = otherFacilitiesIn(sourceText, mother).filter((n) => n !== own);
+  if (known.length) return known.length === 1 ? known[0] : undefined;
+  const found = facilityNamesIn(sourceText, own ? [own] : []);
+  return found.length === 1 ? found[0] : undefined;
+}
+
+function planSourceText(plan: CarePlan, itemIds?: string[]): string {
+  const want = itemIds?.length ? new Set(itemIds) : null;
+  const items = plan.items.filter((i) => i.status === 'active' && (!want || want.has(i.id)));
+  return [...items.map((i) => `${i.title}\n${i.motherText}\n${i.detail}`), ...plan.alerts.map((a) => `${a.title}\n${a.action}\n${a.reason}`), plan.nextContact?.label ?? ''].join('\n');
+}
+
 function relink(prompt: string, t: Pick<Transport, 'deidentify'>, map: ReidentifyMap): string {
   // On-device with de-identification switched off: put the real values back before sending
   return t.deidentify ? prompt : reidentify(prompt, map);
@@ -153,7 +175,9 @@ export function buildPrompt(task: AITask, a: PromptArgs, t: Pick<Transport, 'com
         hasWorker: Boolean(d.map['[WORKER]']),
       };
       const prompt = t.compact ? personalisePromptCompact(ctx, opts) : personalisePrompt(ctx, opts);
-      return { prompt: relink(prompt, t, d.map), terms: d.terms, map: withDefaults(d.map), categories: ctx.categories, removed: ctx.removed };
+      const other = otherFacility(planSourceText(plan, ids), mother, a.facilityName);
+      const map = withDefaults(other ? { ...d.map, '[OTHER_FACILITY]': other } : d.map);
+      return { prompt: relink(prompt, t, map), terms: d.terms, map, categories: ctx.categories, removed: ctx.removed };
     }
     case 'translate': {
       const texts = a.texts ?? {};
@@ -170,13 +194,15 @@ export function buildPrompt(task: AITask, a: PromptArgs, t: Pick<Transport, 'com
       });
       const language = a.language ?? 'en';
       const prompt = t.compact ? translatePromptCompact(sources, language) : translatePrompt(sources, language, a.channel);
-      const map = buildReidentifyMap(mother, a);
+      const map = buildReidentifyMap(mother, { ...a, otherFacility: otherFacility(Object.values(texts).join('\n'), mother, a.facilityName) });
       return { prompt: relink(prompt, t, map), terms, map: withDefaults(map), categories: ['plan item text'], removed: [...removed], keyMap, sources };
     }
     case 'extract': {
       const d = deidentify({ text: a.text ?? '', mother, plan, workerName: a.workerName, facilityName: a.facilityName });
       const prompt = t.compact ? extractPromptCompact(d.text ?? '') : extractPrompt(d.text ?? '');
-      return { prompt: relink(prompt, t, d.map), terms: d.terms, map: d.map, categories: ['clinical report text (scrubbed)'], removed: d.removed };
+      const other = otherFacility(a.text ?? '', mother, a.facilityName);
+      const map = other ? { ...d.map, '[OTHER_FACILITY]': other } : d.map;
+      return { prompt: relink(prompt, t, map), terms: d.terms, map, categories: ['clinical report text (scrubbed)'], removed: d.removed };
     }
     case 'explain':
     case 'suggest': {
@@ -184,7 +210,9 @@ export function buildPrompt(task: AITask, a: PromptArgs, t: Pick<Transport, 'com
       const d = deidentify({ plan, mother, includeDetail: true, workerName: a.workerName, facilityName: a.facilityName });
       const ctx = d.payload!;
       const prompt = task === 'explain' ? explainPrompt(ctx) : suggestPrompt(ctx);
-      return { prompt: relink(prompt, t, d.map), terms: d.terms, map: withDefaults(d.map), categories: ctx.categories, removed: ctx.removed };
+      const other = otherFacility(planSourceText(plan), mother, a.facilityName);
+      const map = withDefaults(other ? { ...d.map, '[OTHER_FACILITY]': other } : d.map);
+      return { prompt: relink(prompt, t, map), terms: d.terms, map, categories: ctx.categories, removed: ctx.removed };
     }
   }
 }
@@ -257,10 +285,14 @@ export interface LiveProviderOptions {
 const CONSTRAINED_TASKS: AITask[] = ['personalise', 'translate', 'extract'];
 
 function describeError(e: unknown): string {
-  if (e instanceof TransportError) return e.message;
-  const o = e as { code?: string; message?: string };
-  if (o?.code && o?.message) return `${o.code}: ${o.message}`;
-  return o?.message ?? String(e);
+  let msg: string;
+  if (e instanceof TransportError) msg = e.message;
+  else {
+    const o = e as { code?: string; message?: string };
+    msg = o?.code && o?.message ? `${o.code}: ${o.message}` : (o?.message ?? String(e));
+  }
+  // Error text reaches the status line and the audit log: never with a key in it
+  return msg.replace(/\b(?:sk|pk|rk|gsk|xai|AIza)[-_A-Za-z0-9]{12,}\b/g, '[key hidden]').replace(/Bearer\s+[-._~+/A-Za-z0-9]{12,}=*/gi, 'Bearer [key hidden]');
 }
 
 export function makeLiveProvider(t: Transport, lo: LiveProviderOptions = {}): AIProvider & { transport: Transport; disabledReason?: string } {
@@ -363,12 +395,12 @@ export function makeLiveProvider(t: Transport, lo: LiveProviderOptions = {}): AI
       const r = await run('personalise', a, { json: false, tier: 'default', signal: a.signal, onText: a.onText });
       if (!r) return fallback();
       const text = reidentify(cleanMessage(r.text), r.built.map);
-      if (t.constrained) {
-        const v = validateAIText(text, a.plan, a.mother);
-        if (!v.ok) {
-          guardFail('personalise', v.issues[0]);
-          return fallback();
-        }
+      // Every transport, not only the small ones: a capable model can still be talked into
+      // reassurance or a new medicine by text inside the plan, so the same checks apply.
+      const v = validateAIText(text, a.plan, a.mother);
+      if (!v.ok) {
+        guardFail('personalise', v.issues[0]);
+        return fallback();
       }
       return text;
     },

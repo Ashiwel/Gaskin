@@ -148,3 +148,69 @@ describe('deidentify and reidentify', () => {
     expect(pv.text).not.toContain('Adaeze');
   });
 });
+
+// ---------- Security review additions (docs/security-review.md) ----------
+
+describe('re-identification never swaps one person or place for another (SEC-03)', () => {
+  beforeAll(() => setPrivacyDirectory({ workers: seed.workers, facilities: seed.facilities, mothers: seed.mothers }));
+
+  it('a named referral hospital comes back as itself, not as her own clinic', () => {
+    const m = seed.mothers[0];
+    const own = seed.facilities.find((f) => f.id === m.facilityId)!.name;
+    const other = seed.facilities.find((f) => f.id !== m.facilityId && /Teaching Hospital/.test(f.name))!.name;
+    const p = planFor(m);
+    p.items.push({ ...p.items[0], id: 'refer.x', status: 'active', title: 'Referral', motherText: `Go to ${other} today.`, detail: `Refer to ${other}.` });
+    const b = buildPrompt('personalise', { plan: p, mother: m, channel: 'sms', itemIds: ['refer.x'] }, { compact: true, deidentify: true });
+    expect(b.prompt).not.toContain(other);
+    expect(b.prompt).toContain('[OTHER_FACILITY]');
+    const back = reidentify('Go to [OTHER_FACILITY] today. Love, [WORKER] at [FACILITY].', b.map);
+    expect(back).toContain(`Go to ${other} today`);
+    expect(back).toContain(own);
+  });
+
+  it('another mother or another worker named in her record is removed and never restored as her', () => {
+    const [m, other] = [seed.mothers[0], seed.mothers[5]];
+    const otherWorker = seed.workers.find((w) => w.id !== m.assignedWorkerId)!;
+    const r = deidentify({ text: `Came with ${other.name} from ${other.community}; seen by ${otherWorker.name}.`, mother: m, asOf: seed.clock });
+    for (const part of [...other.name.split(' '), otherWorker.name.split(' ').pop()!]) expect(r.text).not.toContain(part);
+    const back = reidentify(r.text!, r.map);
+    expect(back).not.toContain(m.name.split(' ')[0]);
+    expect(back).not.toContain(m.community);
+  });
+});
+
+describe('extended privacy sweep: free text the earlier sweep did not cover (SEC-06)', () => {
+  beforeAll(() => setPrivacyDirectory({ workers: seed.workers, facilities: seed.facilities, mothers: seed.mothers }));
+
+  for (const m of seed.mothers) {
+    it(`${m.id}: household notes, carers, worker-added items and other mothers' details stay out of every prompt`, () => {
+      const other = seed.mothers.find((x) => x.id !== m.id && x.facilityId === m.facilityId) ?? seed.mothers.find((x) => x.id !== m.id)!;
+      const p = planFor(m);
+      // A worker-added item and a modified one, written the way a busy worker writes
+      const added = {
+        ...p.items[0],
+        id: 'custom.sweep',
+        status: 'active' as const,
+        origin: 'worker_added' as const,
+        title: `Lift to clinic with ${other.name.split(' ')[0]}`,
+        motherText: `Ask ${other.name} (${other.phone.number ?? '0803 555 0100'}) from ${other.community} to bring you on 14/12/2026.`,
+        detail: `${m.householdNotes ?? ''} Household: ${m.name}, ${m.community}.`,
+        because: [`Told by ${m.name.split(' ')[0]} on 2026-11-01`],
+      };
+      p.items.push(added);
+      const texts = { a: added.motherText, b: added.detail };
+      for (const task of ['personalise', 'translate', 'extract', 'explain', 'suggest'] as AITask[]) {
+        for (const compact of [false, true]) {
+          const built = buildPrompt(task, { plan: p, mother: m, channel: 'whatsapp', language: m.language, itemIds: ['custom.sweep'], texts, text: `${added.motherText}\n${added.detail}` }, { compact, deidentify: true });
+          const bad = [...forbidden(m), ...forbidden(other)];
+          for (const b of bad) {
+            const esc = b.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            expect(built.prompt, `${task}${compact ? ' (compact)' : ''} leaks "${b}"`).not.toMatch(new RegExp(`(^|[^\\p{L}\\p{N}])${esc}($|[^\\p{L}\\p{N}])`, 'iu'));
+          }
+          expect(built.prompt).not.toMatch(ISO_DATE);
+          expect(built.prompt).not.toMatch(DMY_DATE);
+        }
+      }
+    });
+  }
+});

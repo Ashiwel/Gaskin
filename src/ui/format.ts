@@ -188,3 +188,74 @@ export const CHANNEL_LABELS: Record<string, string> = {
   voice: 'Voice call',
   print: 'Printed handout',
 };
+
+// ---------- Small helpers for the redesigned Today, Mothers and Visits screens ----------
+
+export function firstName(name: string): string {
+  return withoutTitle(name).split(/\s+/)[0] ?? name;
+}
+
+/** "Good morning" by the demo clock's hour (UTC, as the rest of the demo). */
+export function greeting(clock: string): string {
+  const h = toDate(clock).getUTCHours();
+  return h < 12 ? 'Good morning' : h < 17 ? 'Good afternoon' : 'Good evening';
+}
+
+/** Compact age: "5 days", "6 wks", "8 mths", "1 yr 3 mths". */
+export function shortAge(days: number): string {
+  if (days < 0) return 'due';
+  if (days < 14) return `${days} day${days === 1 ? '' : 's'}`;
+  if (days < 91) return `${Math.floor(days / 7)} wks`;
+  const months = Math.floor(days / 30.44);
+  if (months < 12) return `${months} mths`;
+  const y = Math.floor(months / 12);
+  const rest = months % 12;
+  return rest ? `${y} yr ${rest} mth${rest === 1 ? '' : 's'}` : `${y} yr${y === 1 ? '' : 's'}`;
+}
+
+/** Where she is in the first 1,000 days, as days from conception (pregnancy is roughly 266 days). */
+export function journeyDay(m: Mother, s: PatientState, clock: string): number | undefined {
+  if (s.stage === 'pregnancy') {
+    const lmp = m.pregnancy?.lmp;
+    const d = lmp ? daysBetween(lmp, clock) - 14 : (s.gestationalWeeks ?? 0) * 7 - 14;
+    return Math.max(0, Math.min(266, d));
+  }
+  if (s.stage === 'postpartum' || s.stage === 'infant') {
+    const age = s.infantAgeDays ?? s.daysPostpartum ?? 0;
+    return Math.min(1000, 266 + Math.max(0, age));
+  }
+  return undefined;
+}
+
+export type ChipColor = 'brand' | 'pink' | 'blue' | 'gray';
+
+/** The stage as a short chip: "31 wks", "Day 5", "Baby 6 mths", "Planning". */
+export function stageChip(s: PatientState): { label: string; color: ChipColor; long: string } {
+  switch (s.stage) {
+    case 'pregnancy':
+      return { label: `${s.gestationalWeeks ?? '?'} wks`, color: 'brand', long: `Pregnant, ${s.gestationalWeeks ?? '?'} weeks` };
+    case 'postpartum':
+      return { label: `Day ${s.daysPostpartum ?? 0}`, color: 'pink', long: `Day ${s.daysPostpartum ?? 0} after birth` };
+    case 'infant':
+      return { label: `Baby ${shortAge(s.infantAgeDays ?? 0)}`, color: 'blue', long: `Baby ${babyAge(s.infantAgeDays)}` };
+    default:
+      return { label: 'Planning', color: 'gray', long: 'Planning a pregnancy' };
+  }
+}
+
+/** Trim a worker-facing reason to a few words for a card. */
+export function shortReason(text: string, max = 56): string {
+  const t = text
+    .replace(/^High risk:\s*/i, '')
+    .replace(/^Urgent:\s*/i, '')
+    .replace(/^Follow-up:\s*/i, '')
+    .trim();
+  const first = t.split(/(?<=\.)\s/)[0].replace(/\.$/, '');
+  const cap = first.charAt(0).toUpperCase() + first.slice(1);
+  return cap.length > max ? `${cap.slice(0, max - 1).replace(/[\s,;:]+\S*$/, '')}…` : cap;
+}
+
+/** ISO date (YYYY-MM-DD) of an ISO datetime. */
+export function isoDay(iso: string): string {
+  return toDate(iso).toISOString().slice(0, 10);
+}

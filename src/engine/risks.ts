@@ -1,6 +1,7 @@
-import type { Risk } from '../types';
+import type { Child, Risk } from '../types';
 import { cite } from '../clinical';
-import { type Facts, ageDays, growthFor, hasCondition, labNumber, labPositive, latestBp, latestEpds, latestLab } from './facts';
+import { daysBetween } from './dates';
+import { type Facts, ageDays, growthFor, hasCondition, isYoungest, labNumber, labPositive, latestBp, latestEpds, latestLab } from './facts';
 
 /**
  * Risk factors that change the plan. Each carries a plain-English reason from her record.
@@ -114,14 +115,27 @@ export function computeRisks(f: Facts): Risk[] {
     if (f.lastBirth.place !== 'facility') add('non_facility_birth', 'Birth outside a facility', 'moderate', `Born ${f.lastBirth.place === 'in_transit' ? 'on the way' : f.lastBirth.place === 'tba' ? 'with a TBA' : 'at home'}: first postnatal check, vitamin K and birth vaccines may be missing.`, ['who-pnc-2022-rec44']);
   }
 
-  // ---- Baby ----
-  const child = f.youngest;
-  if (child && f.youngestAgeDays !== undefined && f.youngestAgeDays <= 1000) {
-    if (child.birthWeightKg < 2.5) add('low_birth_weight', `Low birth weight (${child.name})`, child.birthWeightKg < 1.5 ? 'urgent' : 'high', `${child.birthWeightKg} kg at birth: kangaroo care, frequent breastfeeding, extra growth checks.`, ['who-kmc-2022']);
-    if (child.gestationAtBirthWeeks < 37) add('preterm', `Born preterm (${child.name})`, child.gestationAtBirthWeeks < 32 ? 'urgent' : 'high', `Born at ${child.gestationAtBirthWeeks} weeks.`, ['who-kmc-2022']);
-    const g = growthFor(f, child).filter((x) => x.weightKg !== undefined);
-    const poor = poorGrowth(child, g.map((x) => ({ at: x.at, kg: x.weightKg! })));
-    if (poor) add('poor_growth', `Poor growth (${child.name})`, 'high', poor, ['who-sam-2009', 'who-cf-2023']);
+  // ---- Baby: every child under 1,000 days (the youngest keeps the original codes) ----
+  for (const child of f.under1000) {
+    risks.push(...childRisks(f, child));
+  }
+
+  // ---- Several children: short birth interval ----
+  // WHO: wait at least 24 months from a birth before the next pregnancy; conception under 18 months
+  // after a birth raises the risk of preterm birth, low birth weight and small-for-age babies (Conde-Agudelo 2006).
+  if (f.pregnant && f.interpregnancyDays !== undefined && f.interpregnancyDays >= 0) {
+    const months = Math.floor(f.interpregnancyDays / 30.4);
+    if (f.interpregnancyDays < 18 * 30.4) {
+      add('short_birth_interval', 'Short birth interval', months < 6 ? 'high' : 'moderate', `Conceived ${months} months after her last birth (under 18 months): higher risk of preterm birth, low birth weight and anaemia. WHO advises waiting at least 24 months.`, ['who-birth-spacing-2005', 'conde-agudelo-2006']);
+    } else if (f.interpregnancyDays < 24 * 30.4) {
+      add('birth_interval_under_24m', 'Birth interval under 2 years', 'low', `Conceived ${months} months after her last birth (WHO advises at least 24 months).`, ['who-birth-spacing-2005']);
+    }
+  }
+  if (f.concurrent) {
+    add('pregnant_with_young_child', 'Pregnant while caring for a child under 2', 'moderate', `Caring for ${f.under1000.map((c) => c.name.split(' ')[0]).join(' and ')} while pregnant: extra food, iron and help at home.`, ['who-birth-spacing-2005', 'lopez-fernandez-2017']);
+  }
+  if (f.under1000.length >= 2 && new Set(f.under1000.map((c) => c.dob.slice(0, 10))).size >= 2 && !f.pregnant) {
+    add('two_young_children', 'Two children under 1,000 days', 'moderate', `${f.under1000.map((c) => c.name.split(' ')[0]).join(' and ')} are both under 1,000 days: two feeding, vaccine and growth schedules.`, ['who-birth-spacing-2005']);
   }
 
   // ---- Social ----
@@ -149,6 +163,22 @@ function poorGrowth(child: { dob: string; birthWeightKg: number }, weights: Arra
     }
   }
   return undefined;
+}
+
+/** Risks for one child under 1,000 days. The youngest keeps the original codes; a sibling's carry '@childId'. */
+export function childRisks(f: Facts, child: Child): Risk[] {
+  const out: Risk[] = [];
+  const suffix = isYoungest(f, child) ? '' : `@${child.id}`;
+  const add = (code: string, label: string, severity: Risk['severity'], reason: string, sourceIds: string[]) =>
+    out.push({ code: `${code}${suffix}`, label, severity, reason, sources: cite(...sourceIds) });
+  const age = daysBetween(child.dob, f.asOf);
+  // Birth weight and gestation matter most early; after the first year they stop driving the plan.
+  if (child.birthWeightKg > 0 && child.birthWeightKg < 2.5 && (age <= 365 || !suffix)) add('low_birth_weight', `Low birth weight (${child.name})`, child.birthWeightKg < 1.5 ? 'urgent' : 'high', `${child.birthWeightKg} kg at birth: kangaroo care, frequent breastfeeding, extra growth checks.`, ['who-kmc-2022']);
+  if (child.gestationAtBirthWeeks < 37 && (age <= 365 || !suffix)) add('preterm', `Born preterm (${child.name})`, child.gestationAtBirthWeeks < 32 ? 'urgent' : 'high', `Born at ${child.gestationAtBirthWeeks} weeks.`, ['who-kmc-2022']);
+  const g = growthFor(f, child).filter((x) => x.weightKg !== undefined);
+  const poor = poorGrowth(child, g.map((x) => ({ at: x.at, kg: x.weightKg! })));
+  if (poor) add('poor_growth', `Poor growth (${child.name})`, 'high', poor, ['who-sam-2009', 'who-cf-2023']);
+  return out;
 }
 
 function cap(s: string): string {

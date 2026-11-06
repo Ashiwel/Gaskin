@@ -34,7 +34,7 @@ import { getAppStore, type GaskinStore } from '../storage';
 const RECORD_KEYS = ['mothers', 'overrides', 'proposals', 'learnedRules', 'outbound', 'inbound'] as const;
 
 /** Minimal store surface used here (src/storage's GaskinStore satisfies it) */
-export type SnapshotStore = Pick<GaskinStore<Record<string, unknown>>, 'load' | 'save'> & Partial<Pick<GaskinStore<Record<string, unknown>>, 'status' | 'subscribe'>>;
+export type SnapshotStore = Pick<GaskinStore<Record<string, unknown>>, 'load' | 'save'> & Partial<Pick<GaskinStore<Record<string, unknown>>, 'status' | 'subscribe' | 'flushNow'>>;
 
 export interface LocalBackendOptions {
   store?: SnapshotStore;
@@ -246,6 +246,7 @@ class LocalBackend implements Backend {
   }
 
   async flush(): Promise<void> {
+    await this.store.flushNow?.();
     await this.saving;
   }
 

@@ -56,10 +56,15 @@ function escapeXml(s: string): string {
  * Returns inline SVG markup for a pictogram on a 120 x 120 viewBox.
  * size sets width/height in px (default 120); title overrides the English label.
  */
-export function renderIllustration(key: IllustrationKey, opts: { size?: number; title?: string } = {}): string {
-  const draw = DRAWINGS[key];
-  const size = opts.size ?? 120;
-  const title = escapeXml(opts.title ?? ILLUSTRATION_LABELS[key] ?? key);
+export function renderIllustration(keyIn: IllustrationKey, opts: { size?: number; title?: string } = {}): string {
+  // The key can come from a record (a worker-added item, an imported backup, a synced override), so it is
+  // checked against the library before it goes anywhere near markup. Unknown keys draw the plain disc.
+  const known = Object.prototype.hasOwnProperty.call(DRAWINGS, keyIn);
+  const key = (known ? keyIn : 'unknown') as IllustrationKey;
+  const draw = known ? DRAWINGS[keyIn] : undefined;
+  const n = Number(opts.size ?? 120);
+  const size = Number.isFinite(n) && n > 0 ? Math.min(Math.round(n), 2000) : 120;
+  const title = escapeXml(String(opts.title ?? (known ? ILLUSTRATION_LABELS[keyIn] : 'Picture')));
   const clipId = `gk-${key}-${++clipCounter}`;
   const raw = draw ? draw() : '';
   const usesClip = raw.includes('__CLIP__');

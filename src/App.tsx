@@ -7,48 +7,66 @@ import { Today, useCaseload } from './ui/Today';
 import { Patient } from './ui/Patient';
 import { PhoneView } from './ui/PhoneView';
 import { Review } from './ui/Review';
-import { Dashboard } from './ui/Dashboard';
+import { Insights } from './ui/insights/Insights';
 import { Library } from './ui/Library';
 import { Settings } from './ui/Settings';
 import { About } from './ui/About';
 import { Register } from './ui/Register';
+import { Mothers } from './ui/mothers/Mothers';
+import { Visits } from './ui/visits-list/Visits';
 import { VisitScreen } from './ui/VisitScreen';
 import { DemoPanel } from './ui/DemoPanel';
 import { ManualAIHost } from './ui/ManualAISheet';
-import { AIBadge } from './ui/ai';
+import { useAIStatus } from './ui/ai';
 import { useT } from './ui/i18n';
-import { IBack, IBook, IChart, IDemo, IInfo, IPhone, IReview, ISettings, IToday, ICloudOff } from './ui/icons';
-import { OnboardingWizard, useSetup, setupStore } from './setup';
-import { WorkerLanguageFromSetup, PERSONAS, applyPersona } from './ui/setupFlow';
+import { IDemo, ICloudOff } from './ui/icons';
+import { useSetup, setupStore } from './setup';
+import { WorkerLanguageFromSetup } from './ui/setupFlow';
+import { OnboardingScreen } from './ui/onboarding/Onboarding';
+import { AccountGate, useShellWorker, useWorkerMenuActions } from './ui/accounts/Accounts';
+import { personalLegal } from './ui/settings/legalInfo';
 import { registerMessagePacks } from './ui/messagePacks';
-import { artifactRuntime } from './hosted/runtime';
-import SiblingFocusNav, { siblingFocusItem } from './ui/animata/SiblingFocusNav';
-import { cn } from './ui/animata/cn';
+import { AppShell, NAV_T_KEY, PERSONAL_NAV, WORKER_NAV, type NavEntry, type NavKey, type SearchResult, type ShellMode, type ShellNotification } from './components/shell';
+import { ThemeProvider } from './theme';
+import { DesignShowcase } from './design/DesignShowcase';
 
 registerMessagePacks();
 
-type NavKey = 'today' | 'phone' | 'review' | 'dashboard' | 'library' | 'settings' | 'about';
-
-const NAV: Array<{ key: NavKey; label: string; tKey: string; icon: ReactNode; mobile?: boolean }> = [
-  { key: 'today', label: 'Today', tKey: 'nav.today', icon: <IToday />, mobile: true },
-  { key: 'phone', label: 'Her phone', tKey: 'nav.messages', icon: <IPhone />, mobile: true },
-  { key: 'review', label: 'Expert review', tKey: 'nav.review', icon: <IReview />, mobile: true },
-  { key: 'dashboard', label: 'Programme', tKey: 'nav.dashboard', icon: <IChart />, mobile: true },
-  { key: 'library', label: 'Library', tKey: 'nav.library', icon: <IBook /> },
-  { key: 'settings', label: 'Settings', tKey: 'nav.settings', icon: <ISettings /> },
-  { key: 'about', label: 'About', tKey: 'nav.about', icon: <IInfo /> },
-];
-
-function sectionOf(r: Route): NavKey {
-  return r.name === 'patient' || r.name === 'register' || r.name === 'visit' ? 'today' : (r.name as NavKey);
+/** Which nav item a route belongs to. */
+function sectionOf(r: Route): NavKey | null {
+  switch (r.name) {
+    case 'patient':
+    case 'visit':
+    case 'today':
+      return 'today';
+    case 'register':
+      return 'mothers';
+    case 'phone':
+      return 'messages';
+    case 'insights':
+      return 'insights';
+    case 'mothers':
+    case 'visits':
+    case 'review':
+    case 'library':
+    case 'settings':
+    case 'about':
+      return r.name;
+    default:
+      return null;
+  }
 }
 
-function Wordmark({ onClick }: { onClick?: () => void }) {
-  return (
-    <button className="wordmark" onClick={onClick} aria-label="Gaskin, go to Today">
-      Gaskin<i aria-hidden="true" />
-    </button>
-  );
+function routeFor(k: NavKey): Route {
+  switch (k) {
+    case 'messages':
+      return { name: 'phone' };
+    case 'my-plan':
+    case 'my-baby':
+      return { name: 'today' };
+    default:
+      return { name: k } as Route;
+  }
 }
 
 function Screen() {
@@ -64,8 +82,14 @@ function Screen() {
       return <PhoneView id={route.id} />;
     case 'review':
       return <Review />;
-    case 'dashboard':
-      return <Dashboard />;
+    case 'insights':
+      return <Insights />;
+    case 'mothers':
+      return <Mothers />;
+    case 'visits':
+      return <Visits />;
+    case 'design':
+      return <DesignShowcase />;
     case 'library':
       return <Library page={route.page} />;
     case 'settings':
@@ -79,50 +103,20 @@ function Screen() {
   }
 }
 
-function MoreMenu({ go, onClose }: { go: (r: Route) => void; onClose: () => void }) {
-  const t = useT();
-  return (
-    <>
-      <div className="scrim" onClick={onClose} />
-      <div className="sheet" style={{ top: 'auto', height: 'auto', width: '100%', borderRadius: '16px 16px 0 0' }} role="dialog" aria-label="More">
-        <div className="sheet-body" style={{ gap: 4 }}>
-          {NAV.filter((n) => !n.mobile).map((n) => (
-            <button
-              key={n.key}
-              className="nav-item"
-              onClick={() => {
-                go({ name: n.key } as Route);
-                onClose();
-              }}
-            >
-              {n.icon}
-              {t(n.tKey, n.label)}
-            </button>
-          ))}
-        </div>
-      </div>
-    </>
-  );
-}
-
-/** Storage and sync status, with sign-in and "Load demo data" when needed */
-function StatusLine() {
+/** Sign-in and "Load demo data" when needed (the sync line itself is on the worker card). */
+function StatusActions() {
   const s = useBridgeStatus();
   const [open, setOpen] = useState(false);
-  if (!s.ready) return null;
+  if (!s.ready || (!s.needsLogin && !s.empty && !open)) return null;
   return (
     <>
-      <span className="inline-flex items-center gap-1.5 opacity-85" data-testid="storage-status" title={s.status?.fallbackReason ?? s.status?.label}>
-        <span aria-hidden="true" className={cn('inline-block size-1.5 rounded-full', s.localOnly ? 'bg-amber' : 'bg-green')} />
-        {s.line}
-      </span>
       {s.needsLogin ? (
-        <button onClick={() => setOpen(true)} data-testid="sign-in">
+        <button className="font-semibold underline underline-offset-2" onClick={() => setOpen(true)} data-testid="sign-in">
           Sign in
         </button>
       ) : null}
       {s.empty ? (
-        <button onClick={() => void loadDemoData()} data-testid="load-demo">
+        <button className="font-semibold underline underline-offset-2" onClick={() => void loadDemoData()} data-testid="load-demo">
           Load demo data
         </button>
       ) : null}
@@ -181,18 +175,28 @@ function SignIn({ onClose }: { onClose: () => void }) {
   );
 }
 
+/** Personal mode (a mother using Gaskin for herself) is chosen at setup; the auth module will own it. */
+function useShellMode(): ShellMode {
+  const saved = useSetup();
+  const a = saved?.answers as { role?: string; audience?: string } | undefined;
+  return a?.audience === 'personal' || a?.role === 'personal' || a?.role === 'mother' ? 'personal' : 'worker';
+}
+
 function Shell() {
   const { state, dispatch } = useApp();
   const worker = useWorker();
   const { route, go, back } = useNav();
   const toast = useToast();
+  const ai = useAIStatus();
+  const bridge = useBridgeStatus();
+  const mode = useShellMode();
+  const menuActions = useWorkerMenuActions();
   const [demo, setDemo] = useState(false);
-  const [more, setMore] = useState(false);
   const rows = useCaseload();
-  const urgent = rows.filter((r) => (r.urgency === 'emergency' || r.urgency === 'urgent') && (state.country === 'ALL' || r.mother.country === state.country)).length;
+  const urgent = rows.filter((r) => r.urgency === 'emergency' || r.urgency === 'urgent').length;
   const openProposals = state.proposals.filter((p) => p.status === 'pending').length;
   const queued = state.outbound.filter((o) => o.status === 'queued').length;
-  const current = sectionOf(route);
+  const unreadReplies = state.mothers.filter((m) => state.inbound.some((i) => i.motherId === m.id && (!state.readInbound[m.id] || i.receivedAt > state.readInbound[m.id]))).length;
   const t = useT();
 
   useEffect(() => onBackendNote((n) => toast(n.text)), [toast]);
@@ -211,9 +215,40 @@ function Shell() {
     return () => window.removeEventListener('keydown', onKey);
   }, []);
 
+  const nav: NavEntry[] = (mode === 'personal' ? PERSONAL_NAV : WORKER_NAV)
+    .filter((n) => n.key !== 'review' || worker?.isClinicalReviewer || openProposals > 0)
+    .map((n) => ({
+      ...n,
+      label: NAV_T_KEY[n.key] ? t(NAV_T_KEY[n.key]!, n.label) : n.label,
+      badge: n.key === 'today' ? urgent : n.key === 'review' ? openProposals : n.key === 'messages' ? unreadReplies : undefined,
+      badgeTone: n.key === 'today' ? 'error' : 'gray',
+    }));
+
   const mother = route.name === 'patient' || route.name === 'visit' ? state.mothers.find((m) => m.id === route.id) : undefined;
-  const navItem = NAV.find((n) => n.key === current);
-  const title = mother ? mother.name : navItem ? t(navItem.tKey, navItem.label) : '';
+  const facility = state.facilities.find((f) => f.id === worker?.facilityId)?.name;
+  const shellWorker = useShellWorker(
+    worker ? { id: worker.id, name: worker.name, role: worker.isClinicalReviewer ? 'Clinical reviewer' : t('common.health_worker', 'Health worker'), subtitle: facility } : undefined,
+  );
+
+  const search = (q: string): SearchResult[] => {
+    const needle = q.toLowerCase();
+    const mothers = state.mothers
+      .filter((m) => m.name.toLowerCase().includes(needle) || m.community?.toLowerCase().includes(needle))
+      .slice(0, 8)
+      .map((m) => ({ id: `m-${m.id}`, label: m.name, detail: m.community, group: 'Mother', onSelect: () => go({ name: 'patient', id: m.id, tab: 'plan' }) }));
+    const pages = nav
+      .filter((n) => n.label.toLowerCase().includes(needle))
+      .map((n) => ({ id: `p-${n.key}`, label: n.label, group: 'Page', onSelect: () => go(routeFor(n.key)) }));
+    return [...mothers, ...pages];
+  };
+
+  const notifications: ShellNotification[] = [
+    ...rows
+      .filter((r) => r.urgency === 'emergency' || r.urgency === 'urgent')
+      .slice(0, 5)
+      .map((r) => ({ id: `u-${r.mother.id}`, title: r.mother.name, body: r.reason, tone: 'error' as const, unread: true, onOpen: () => go({ name: 'patient', id: r.mother.id, tab: 'plan' }) })),
+    ...(openProposals ? [{ id: 'review', title: `${openProposals} change${openProposals === 1 ? '' : 's'} waiting for review`, tone: 'brand' as const, unread: true, onOpen: () => go({ name: 'review' }) }] : []),
+  ];
 
   if (route.name === 'visit') {
     return (
@@ -224,97 +259,73 @@ function Shell() {
     );
   }
 
+  const notice = state.offline ? (
+    <div role="note" className="flex flex-wrap items-center justify-center gap-x-3 gap-y-1 bg-warning-primary px-4 py-2 text-center text-sm text-warning-primary ring-1 ring-border-warning_subtle">
+      <ICloudOff width={16} height={16} aria-hidden="true" />
+      <span>
+        Offline. {queued ? `${queued} message${queued === 1 ? '' : 's'} waiting to sync.` : 'Changes are saved on this phone.'} Danger-sign alerts still go out by SMS.
+      </span>
+      <button className="font-semibold underline underline-offset-2" onClick={() => dispatch({ type: 'setOffline', offline: false, now: new Date(state.clock).toISOString() })}>
+        Reconnect
+      </button>
+    </div>
+  ) : (
+    <div role="note" className="flex flex-wrap items-center justify-center gap-x-3 gap-y-1 bg-secondary px-4 py-1.5 text-center text-xs text-tertiary">
+      <span className="inline-flex items-center gap-1.5">
+        <span aria-hidden="true" className="size-1.5 rounded-full bg-fg-brand-secondary" />
+        {t('banner.demo', 'Demo with synthetic data')}
+      </span>
+      <StatusActions />
+    </div>
+  );
+
   return (
     <>
-      <div className={`demo-banner${state.offline ? ' offline' : ''}`} role="note">
-        {state.offline ? (
-          <>
-            <ICloudOff width={14} height={14} />
-            <span>
-              Offline. {queued ? `${queued} message${queued === 1 ? '' : 's'} waiting to sync.` : 'Changes are saved on this phone.'} Danger-sign alerts still go out by SMS.
-            </span>
-            <button onClick={() => dispatch({ type: 'setOffline', offline: false, now: new Date(state.clock).toISOString() })}>Reconnect</button>
-          </>
-        ) : (
-          <>
-            <span className="dot" />
-            <span>{t('banner.demo', 'Demo with synthetic data')}</span>
-            <span aria-hidden="true" className="opacity-50">
-              ·
-            </span>
-            <StatusLine />
-          </>
-        )}
-      </div>
-
-      <div className="shell">
-        <nav className="rail" aria-label="Main">
-          <Wordmark onClick={() => go({ name: 'today' })} />
-          <p className="rail-sub">Continuity of care, conception to day 1,000</p>
-          <SiblingFocusNav className="gap-1">
-            {NAV.map((n) => (
-              <button key={n.key} className={cn('nav-item', siblingFocusItem)} aria-current={current === n.key ? 'page' : undefined} onClick={() => go({ name: n.key } as Route)}>
-                {n.icon}
-                {t(n.tKey, n.label)}
-                {n.key === 'today' && urgent ? <span className="count hot">{urgent}</span> : null}
-                {n.key === 'review' && openProposals ? <span className="count">{openProposals}</span> : null}
-              </button>
-            ))}
-          </SiblingFocusNav>
-          <div className="rail-foot">
-            <div className="worker-card">
-              <strong>{worker?.name}</strong>
-              <span className="muted small">
-                {worker?.isClinicalReviewer ? 'Clinical reviewer' : t('common.health_worker', 'Health worker')}
-                {worker ? `, ${state.facilities.find((f) => f.id === worker.facilityId)?.name ?? ''}` : ''}
-              </span>
-            </div>
-            <AIBadge />
-          </div>
-        </nav>
-
-        <header className="topbar">
-          {route.name === 'patient' ? (
-            <button className="btn icon ghost" onClick={() => back()} aria-label={t('nav.back', 'Back')}>
-              <IBack />
-            </button>
-          ) : (
-            <Wordmark onClick={() => go({ name: 'today' })} />
-          )}
-          <span className="grow topbar-title">{route.name === 'patient' || current !== 'today' ? title : ''}</span>
-          <AIBadge />
-        </header>
-
-        <main className="main" id="main">
-          <Screen />
-        </main>
-      </div>
-
-      <nav className="tabbar" aria-label="Main">
-        {NAV.filter((n) => n.mobile).map((n) => (
-          <button key={n.key} aria-current={current === n.key ? 'page' : undefined} onClick={() => go({ name: n.key } as Route)}>
-            {n.icon}
-            {n.key === 'phone' ? t('nav.messages', 'Her phone') : n.key === 'review' ? t('nav.review', 'Review') : t(n.tKey, n.label)}
-            {n.key === 'today' && urgent ? <span className="pip">{urgent}</span> : null}
-            {n.key === 'review' && openProposals ? <span className="pip" style={{ background: 'var(--clay)' }}>{openProposals}</span> : null}
+      <AppShell
+        mode={mode}
+        nav={nav}
+        current={sectionOf(route)}
+        onNavigate={(k) => go(routeFor(k))}
+        title={mother ? mother.name : undefined}
+        onBack={route.name === 'patient' || route.name === 'register' ? () => back() : undefined}
+        worker={shellWorker}
+        workerActions={{ ...menuActions, onOpenSettings: () => go({ name: 'settings' }) }}
+        sync={{
+          line: bridge.ready ? bridge.line : 'Opening your records…',
+          state: !bridge.ready ? 'syncing' : state.offline ? 'offline' : bridge.localOnly ? 'local' : 'ok',
+          detail: bridge.status?.fallbackReason ?? bridge.status?.label,
+        }}
+        ai={{
+          label: ai.label || (ai.live ? 'Live AI' : 'Templates'),
+          state: ai.provider === 'none' ? 'off' : ai.live ? 'live' : ai.lastError ? 'error' : 'templates',
+          detail: ai.lastError ? `Last live attempt failed: ${ai.lastError}` : undefined,
+          onClick: () => go({ name: 'settings' }),
+        }}
+        notifications={notifications}
+        search={search}
+        legal={mode === 'personal' ? { ...personalLegal(), onMore: () => go({ name: 'about' }) } : undefined}
+        topNotice={notice}
+        actions={
+          <button
+            type="button"
+            className="inline-flex size-10 cursor-pointer items-center justify-center gap-1.5 rounded-full text-xs font-semibold text-secondary ring-1 ring-secondary ring-inset hover:bg-primary_hover sm:h-8 sm:w-auto sm:px-2.5"
+            onClick={() => setDemo(true)}
+            aria-label="Open demo controls"
+            data-testid="demo-open"
+          >
+            <IDemo width={14} height={14} aria-hidden="true" /> <span className="hidden sm:inline">Demo</span>
+            <kbd className="hidden rounded-sm px-1 text-[10px] text-quaternary ring-1 ring-secondary lg:inline">D</kbd>
           </button>
-        ))}
-        <button aria-current={['library', 'settings', 'about'].includes(current) ? 'page' : undefined} onClick={() => setMore(true)}>
-          <IBook />
-          {t('common.more', 'More')}
-        </button>
-      </nav>
-
-      <button className="demo-fab" onClick={() => setDemo(true)} aria-label="Open demo controls">
-        <IDemo /> Demo <kbd>D</kbd>
-      </button>
-
+        }
+      >
+        <Screen />
+      </AppShell>
       {demo ? <DemoPanel onClose={() => setDemo(false)} /> : null}
-      {more ? <MoreMenu go={(r) => go(r)} onClose={() => setMore(false)} /> : null}
       <ManualAIHost />
     </>
   );
 }
+
 
 class ErrorBoundary extends Component<{ children: ReactNode }, { error: Error | null }> {
   state = { error: null as Error | null };
@@ -361,61 +372,39 @@ class ErrorBoundary extends Component<{ children: ReactNode }, { error: Error | 
 function SetupGate({ children }: { children: ReactNode }) {
   const saved = useSetup();
   const [skipped, setSkipped] = useState(false);
-  if (saved || skipped) return <>{children}</>;
+  const done = Boolean(saved || skipped);
+  useEffect(() => {
+    // Setup can also finish outside onDone (a persona saves the setup itself): reset the scroll then too.
+    if (done) {
+      try {
+        window.scrollTo({ top: 0 });
+      } catch {
+        /* ignore */
+      }
+    }
+  }, [done]);
+  if (done) return <>{children}</>;
   return <Onboarding onSkip={() => setSkipped(true)} />;
 }
 
 function Onboarding({ onSkip }: { onSkip: () => void }) {
-  const { dispatch } = useApp();
-  const [busy, setBusy] = useState<string | null>(null);
-  const land = (workerId?: string) => {
-    if (workerId) dispatch({ type: 'setWorker', workerId });
-    dispatch({ type: 'setCountry', country: 'ALL' });
+  const land = () => {
     try {
       window.history.replaceState({ route: { name: 'today' }, depth: 0 }, '', '#today');
+      // The persona list is a long page: start Today at the top, not where onboarding was scrolled.
+      window.scrollTo({ top: 0 });
     } catch {
       /* ignore */
     }
   };
   return (
-    <div className="min-h-dvh bg-paper">
-      <section aria-label="Quick start" className="mx-auto max-w-[760px] px-4 pt-8 sm:pt-12">
-        <p className="m-0 text-[0.72rem] font-semibold uppercase tracking-[0.08em] text-ink-3">For reviewers: skip the questions</p>
-        <h1 className="mt-2 mb-1 font-serif text-[1.6rem] leading-tight font-medium text-ink">Start as one of three health workers</h1>
-        <p className="m-0 max-w-[60ch] text-[0.95rem] text-ink-2">Each applies the setup Gaskin would recommend for her, at once. Or answer the questions below for your own.</p>
-        <div className="mt-4 grid gap-3 sm:grid-cols-3">
-          {PERSONAS.map((p) => (
-            <button
-              key={p.id}
-              data-persona={p.id}
-              disabled={Boolean(busy)}
-              className="flex min-h-[44px] cursor-pointer flex-col gap-1.5 rounded-[var(--r-l)] border border-line bg-card p-4 text-left text-ink transition-colors duration-200 hover:border-clay focus-visible:outline-2 focus-visible:outline-focus disabled:opacity-60 motion-reduce:transition-none"
-              onClick={async () => {
-                setBusy(p.id);
-                try {
-                  await applyPersona(p, Boolean(artifactRuntime()));
-                } catch {
-                  /* applySetupPlan never throws; this is belt and braces */
-                }
-                land(p.workerId);
-                setBusy(null);
-              }}
-            >
-              <strong className="font-serif text-[1.08rem] leading-snug font-medium">{p.title}</strong>
-              <span className="text-[0.84rem] leading-snug text-ink-2">{p.blurb}</span>
-              <span className="mt-auto pt-1 text-[0.8rem] font-semibold text-clay-ink">{busy === p.id ? 'Setting up…' : 'Use this setup'}</span>
-            </button>
-          ))}
-        </div>
-      </section>
-      <OnboardingWizard
-        onComplete={() => land()}
-        onSkipAll={() => {
-          onSkip();
-          land();
-        }}
-      />
-    </div>
+    <OnboardingScreen
+      onDone={land}
+      onSkip={() => {
+        onSkip();
+        land();
+      }}
+    />
   );
 }
 
@@ -432,15 +421,19 @@ function WithNav() {
 
 export default function App() {
   return (
+    <ThemeProvider>
     <ErrorBoundary>
       <AppProvider>
         <WorkerLanguageFromSetup>
           <SetupGate>
-            <WithNav />
+            <AccountGate>
+              <WithNav />
+            </AccountGate>
           </SetupGate>
         </WorkerLanguageFromSetup>
       </AppProvider>
     </ErrorBoundary>
+    </ThemeProvider>
   );
 }
 

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { BirthEvent, Child, FeedingEvent, LabEvent, Mother, ScreeningEvent, SymptomEvent, VitalsEvent } from '../types';
-import { MOTHER_TEXT, TRADITIONAL_PRACTICES } from '../clinical';
+import { MOTHER_TEXT, PLAN_TEXT, TRADITIONAL_PRACTICES } from '../clinical';
 import { buildPlan } from './index';
 import { ev, makeMother } from './fixtures.test-helpers';
 
@@ -98,10 +98,11 @@ describe('mother-facing text', () => {
   }
   for (const p of TRADITIONAL_PRACTICES) texts.set(`library:${p.id}`, p.motherText);
   for (const [k, t] of Object.entries(MOTHER_TEXT)) texts.set(`template:${k}`, t);
+  for (const [k, t] of Object.entries(PLAN_TEXT)) texts.set(`template:${k}`, t);
 
-  it('every item and alert carries a template key from MOTHER_TEXT', () => {
+  it('every item and alert carries a template key from MOTHER_TEXT or PLAN_TEXT', () => {
     expect(unkeyed).toEqual([]);
-    for (const k of keys) expect(MOTHER_TEXT[k], k).toBeDefined();
+    for (const k of keys) expect(MOTHER_TEXT[k] ?? PLAN_TEXT[k], k).toBeDefined();
   });
 
   it('templates render with no leftover placeholders', () => {

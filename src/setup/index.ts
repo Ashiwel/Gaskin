@@ -2,9 +2,9 @@
  * Guided onboarding. The UI mounts <OnboardingWizard onComplete={…} /> when isSetupDone() is false,
  * and any screen can read the chosen setup with useSetup().
  */
-export { QUESTIONS, visibleQuestions, NOT_SURE, WORKER_LANGUAGE_OPTIONS, MOTHER_LANGUAGE_LABELS } from './questions';
-export type { Question, QuestionOption, QuestionKind, IconKey } from './questions';
-export { recommendSetup, planChannels } from './recommend';
+export { QUESTIONS, PERSONAL_QUESTIONS, AUDIENCE_QUESTION, AREA_QUESTION, visibleQuestions, NOT_SURE, WORKER_LANGUAGE_OPTIONS, MOTHER_LANGUAGE_LABELS, AUDIENCE_OPTIONS, TOP_LANGUAGES, answerCountry, answerPlace, countryAnswer, regionAnswer } from './questions';
+export type { Question, QuestionOption, QuestionKind, IconKey, PlaceQuestion } from './questions';
+export { recommendSetup, planChannels, resolveCountryCode, setupMode } from './recommend';
 export { applySetupPlan } from './apply';
 export type { ApplyOptions, ApplyProgress, ApplyResult, ApplyStepId } from './apply';
 export { connectAssistant, setAssistantConnector, assistantConnectorReady, GASKIN_MCPB_URL, GASKIN_CONNECTOR_URL } from './assistant';

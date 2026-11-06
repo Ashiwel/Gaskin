@@ -113,3 +113,29 @@ describe('provider adapters', () => {
     expect(wh.items.map((i) => i.type)).toEqual(['receipt', 'inbound']);
   });
 });
+
+describe('email over SMTP (nodemailer 10)', () => {
+  it('builds a real nodemailer transport from the SMTP URL and sends plain text through it', async () => {
+    const { SmtpGateway, smtpTransport, SAFE_MAIL_OPTIONS } = await import('../src/messaging/smtp');
+    // A real transporter from the URL form the server config uses (no connection is made here).
+    const t = smtpTransport('smtp://user:pass@127.0.0.1:2525');
+    expect(typeof t.sendMail).toBe('function');
+    expect(SAFE_MAIL_OPTIONS).toEqual({ disableFileAccess: true, disableUrlAccess: true });
+    // Send through nodemailer's own JSON transport with the same hardening, end to end.
+    const nodemailer = (await import('nodemailer')).default;
+    const json = nodemailer.createTransport({ jsonTransport: true }, SAFE_MAIL_OPTIONS);
+    const gw = new SmtpGateway({ url: 'smtp://unused', from: 'Gaskin <care@example.org>' }, json as never);
+    const r = await gw.send({ to: 'ada@example.org', body: 'Your next visit is on 12 Nov.', channel: 'email', facilityName: 'Ogui PHC' } as never);
+    expect(r.status).toBe('sent');
+    expect(r.providerMessageId).toBeTruthy();
+  });
+
+  it('reports a refused address as failed and a transport error in plain words', async () => {
+    const { SmtpGateway } = await import('../src/messaging/smtp');
+    const refused = new SmtpGateway({ url: 'x', from: 'a@b.c' }, { sendMail: async () => ({ rejected: ['x@y.z'] }) });
+    expect((await refused.send({ to: 'x@y.z', body: 'hi', channel: 'email' } as never)).status).toBe('failed');
+    const down = new SmtpGateway({ url: 'x', from: 'a@b.c' }, { sendMail: async () => Promise.reject(new Error('connect ECONNREFUSED')) });
+    const r = await down.send({ to: 'x@y.z', body: 'hi', channel: 'email' } as never);
+    expect(r).toMatchObject({ status: 'failed', reason: expect.stringMatching(/^Email could not be sent: connect ECONNREFUSED/) });
+  });
+});

@@ -14,6 +14,15 @@ export type CountryCode = 'NG' | 'KE' | 'GH';
  */
 export type LanguageCode = 'en' | 'pcm' | 'ha' | 'yo' | 'ig' | 'sw' | 'tw' | 'bin' | 'urh' | 'ar' | 'dag' | 'luo' | 'ee' | 'ff';
 
+/**
+ * Extra languages with draft packs for francophone, lusophone and Bantu-speaking Africa
+ * (src/i18n/packs): pt Portuguese (Mozambique, Angola), zu isiZulu, xh isiXhosa, rw Kinyarwanda,
+ * ln Lingala, ny Chichewa/Nyanja, sn chiShona, lg Luganda, ki Gĩkũyũ, st Sesotho, tn Setswana.
+ * Kept apart from LanguageCode so exhaustive Record<LanguageCode, …> tables elsewhere still compile;
+ * fold them into LanguageCode when those tables gain entries.
+ */
+export type ExtraLanguageCode = 'pt' | 'zu' | 'xh' | 'rw' | 'ln' | 'ny' | 'sn' | 'lg' | 'ki' | 'st' | 'tn';
+
 export type Channel = 'sms' | 'whatsapp' | 'email' | 'voice' | 'print';
 
 export interface Citation {
@@ -162,7 +171,16 @@ export interface Mother {
   country: CountryCode;
   region: string;
   community: string;
+  /** Pack used for her messages and handouts ('en' when her language has no pack yet) */
   language: LanguageCode;
+  /**
+   * Optional. The language she actually speaks, as a BCP-47 tag (e.g. 'zu', 'tiv', 'nso'), even when
+   * Gaskin has no pack for it. Rendering uses packFor(languageTag) when a pack exists, else plain
+   * English with a visible "Coming soon" note (motherLanguageInfo in src/i18n). See src/geo languagesFor and packFor.
+   */
+  languageTag?: string;
+  /** Optional. LGA, sub-county, district or municipality (src/geo loadAreas) */
+  area?: string;
   literacy: Literacy;
   phone: { access: PhoneAccess; number?: string; hasWhatsApp: boolean };
   email?: string;
@@ -199,6 +217,8 @@ export interface Mother {
 
   /** Everything that happens is an event; state is derived from events */
   events: ClinicalEvent[];
+  /** Personal use: what she has told Gaskin about her own care (ISO dates) */
+  selfCare?: { registeredWithClinicAt?: string; clinicName?: string; nextCheckupAt?: string };
 }
 
 // ---------- Events (append-only timeline) ----------
@@ -294,7 +314,9 @@ export type SymptomCode =
   | 'baby_cord_redness'
   | 'baby_lethargic'
   | 'baby_diarrhoea'
-  | 'baby_vomiting_everything';
+  | 'baby_vomiting_everything'
+  // found at a visit
+  | 'pallor';
 
 export interface SymptomEvent extends EventBase {
   kind: 'symptom';
@@ -362,7 +384,28 @@ export interface ReferralEvent extends EventBase {
   status: 'open' | 'arrived' | 'completed' | 'not_completed';
 }
 
+/** Why a recommended test, medicine, vaccine, food or trip could not happen. */
+export type ConstraintReason = 'cannot_afford' | 'not_available' | 'side_effects' | 'declined' | 'forgets' | 'no_transport';
+
+/** Why she declined. Her right to decide is recorded; the plan answers the concern and offers again. */
+export type DeclinedReason = 'fear_of_side_effects' | 'cost' | 'religious_or_cultural' | 'partner_or_family_objects' | 'does_not_see_need' | 'distance_or_time' | 'prefers_traditional_remedy' | 'other';
+
+/** A recommendation could not be followed. The engine answers with an alternative (never a silent downgrade). */
+export interface ConstraintEvent extends EventBase {
+  kind: 'constraint';
+  /** Plan item id or checklist base id, e.g. 'med.iron_folate', 'test.haemoglobin', 'd.vaccine.PENTA2' */
+  itemId: string;
+  reason: ConstraintReason;
+  /** Set when the item could not be done today but may be later (tests: "not done today") */
+  temporary?: boolean;
+  /** Required when reason is 'declined' */
+  declinedReason?: DeclinedReason;
+  /** Required when reason is 'side_effects'. Symptom codes come from SIDE_EFFECTS (src/clinical/sideEffects.ts). */
+  sideEffect?: { symptoms: string[]; severity: 'mild' | 'moderate' | 'severe' };
+}
+
 export type ClinicalEvent =
+  | ConstraintEvent
   | VisitEvent
   | VitalsEvent
   | LabEvent
@@ -386,6 +429,38 @@ export interface ExtractedFinding {
 
 export type JourneyStage = 'preconception' | 'pregnancy' | 'postpartum' | 'infant';
 
+/** One child under 1,000 days, as of asOf. */
+export interface ChildState {
+  childId: string;
+  name: string;
+  sex: Child['sex'];
+  dob: string;
+  ageDays: number;
+  /** Corrected for prematurity (born before 37 weeks), to 2 years */
+  correctedAgeDays?: number;
+  feeding: Child['feeding'];
+  /** Same date of birth as a sibling */
+  twin: boolean;
+  latestWeightKg?: number;
+  latestWeightAt?: string;
+  latestMuacCm?: number;
+  immunisation: { next?: { label: string; due: string; missing: string[]; overdueDays: number }; overdue: string[] };
+  /** Next CDC milestone set to check, in months */
+  milestonesDueMonths?: number;
+  risks: Risk[];
+}
+
+/** A test that should have a result but does not (not available, declined, not done today, or never done). */
+export interface UnknownResult {
+  test: string;
+  since: string;
+  /** What not knowing could hide, and what to do */
+  consequence: string;
+  /** 'refer' when the missing result could hide danger now */
+  action: 'refer_for_test' | 'test_next_visit';
+  childId?: string;
+}
+
 export interface PatientState {
   motherId: string;
   asOf: string;
@@ -397,6 +472,16 @@ export interface PatientState {
   /** Youngest child's age in days */
   infantAgeDays?: number;
   infant?: Child;
+  /** Every child under 1,000 days, youngest last. `infant` is the youngest, kept for compatibility. */
+  children?: ChildState[];
+  /** Pregnant while also caring for a child under 1,000 days */
+  concurrent?: boolean;
+  /** Months from the last birth to this conception (LMP), when pregnant again */
+  interpregnancyMonths?: number;
+  /** Tests with no result that matter now */
+  unknowns?: UnknownResult[];
+  /** Constraints recorded in the last 90 days, latest per item */
+  constraints?: Array<{ itemId: string; reason: ConstraintReason; at: string; childId?: string }>;
   latest: {
     systolic?: number;
     diastolic?: number;
@@ -497,6 +582,25 @@ export type IllustrationKey =
   | 'warm_baby'
   | 'growth_chart';
 
+/** Steps and concrete examples for doing a recommendation. Every string has a template key in PLAN_TEXT for translation. */
+export interface HowTo {
+  steps: string[];
+  examples?: string[];
+  /** What to avoid, if anything */
+  avoid?: string[];
+  stepKeys?: string[];
+  exampleKeys?: string[];
+  avoidKeys?: string[];
+  illustration?: IllustrationKey;
+  /** Id in GUIDES (src/clinical/guides.ts) */
+  guideId?: string;
+}
+
+export interface PlanAlternative {
+  reason: ConstraintReason;
+  item: { title: string; detail: string; motherText: string; motherTextKey?: string; motherTextParams?: Record<string, string | number>; howTo?: HowTo };
+}
+
 export interface PlanItem {
   /** Stable rule id, e.g. 'med.iron_folate'. Overrides target this id. */
   id: string;
@@ -527,6 +631,16 @@ export interface PlanItem {
   /** Set when an override changed or removed this item */
   overriddenBy?: string; // override id
   status: 'active' | 'removed' | 'done';
+  /** The child this item is about, when she has more than one child under 1,000 days */
+  childId?: string;
+  /** How to do it: steps and examples */
+  howTo?: HowTo;
+  /** What to offer when she cannot do it (tests, medicines, vaccines, food, transport) */
+  alternatives?: PlanAlternative[];
+  /** Set when a recorded constraint changed this item */
+  constraint?: { reason: ConstraintReason; at: string };
+  /** Worker-only content (clinical detail, standing orders); hidden in personal mode */
+  workerOnly?: boolean;
 }
 
 export interface Alert {
@@ -544,6 +658,8 @@ export interface Alert {
   /** Template key in MOTHER_TEXT */
   motherTextKey?: string;
   motherTextParams?: Record<string, string | number>;
+  /** The child this alert is about */
+  childId?: string;
 }
 
 export interface NextContact {
@@ -589,6 +705,9 @@ export interface Override {
   proposeGlobal: boolean;
   /** Patient-level overrides are active immediately. Global proposals need review. */
   status: 'active' | 'reverted';
+  /** Worker who reverted it */
+  revertedBy?: string;
+  revertedAt?: string;
 }
 
 /** A proposal to change the knowledge base, raised from one or more overrides */
@@ -609,6 +728,8 @@ export interface RuleProposal {
   reviewNote?: string;
   createdAt: string;
   reviewedAt?: string;
+  /** Worker whose override raised the proposal */
+  createdBy?: string;
 }
 
 /** Structured condition for learned rules; all present fields must match */
@@ -653,6 +774,10 @@ export interface OutboundMessage {
   /** Was the text written or translated by AI (reviewed by a worker before sending)? */
   aiAssisted: boolean;
   reviewedBy?: string;
+  /** Worker who drafted or queued it */
+  createdBy?: string;
+  /** Worker who pressed send */
+  sentBy?: string;
 }
 
 /** Inbound message from the mother (symptom report, question, reply) */
@@ -664,6 +789,8 @@ export interface InboundMessage {
   receivedAt: string;
   /** Symptoms the system recognised in the text */
   parsedSymptoms?: SymptomCode[];
+  /** Worker who read and handled it */
+  handledBy?: string;
 }
 
 // ---------- Knowledge base entries (for the library screen) ----------

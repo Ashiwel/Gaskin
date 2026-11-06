@@ -21,7 +21,14 @@ function trimSlash(s: string): string {
   return s.replace(/\/+$/, '');
 }
 
-async function httpError(res: Response, who: string): Promise<TransportError> {
+/** Remove the worker's key (and anything that looks like a bearer key) from text that may be shown or logged */
+export function redactSecrets(text: string, secrets: Array<string | undefined> = []): string {
+  let out = text;
+  for (const k of secrets) if (k && k.length >= 6) out = out.split(k).join('[key hidden]');
+  return out.replace(/\b(?:sk|pk|rk|gsk|xai|AIza)[-_A-Za-z0-9]{12,}\b/g, '[key hidden]').replace(/Bearer\s+[-._~+/A-Za-z0-9]{12,}=*/gi, 'Bearer [key hidden]');
+}
+
+async function httpError(res: Response, who: string, secrets: Array<string | undefined> = []): Promise<TransportError> {
   let detail = '';
   try {
     const body = await res.text();
@@ -40,7 +47,7 @@ async function httpError(res: Response, who: string): Promise<TransportError> {
         : s === 429
           ? `${who} is rate-limiting or out of credit (HTTP 429). Try again later.`
           : `${who} returned HTTP ${s}.`;
-  return new TransportError(detail ? `${why} ${detail.slice(0, 160)}` : why, permanent, `http_${s}`);
+  return new TransportError(redactSecrets(detail ? `${why} ${detail.slice(0, 160)}` : why, secrets), permanent, `http_${s}`);
 }
 
 function networkError(e: unknown, who: string, url: string): Error {
@@ -128,7 +135,7 @@ export function openAICompatibleTransport(cfg: OpenAICompatibleConfig, base: Par
       } catch (e) {
         throw networkError(e, who, cfg.baseUrl);
       }
-      if (!res.ok) throw await httpError(res, who);
+      if (!res.ok) throw await httpError(res, who, [cfg.apiKey]);
       if (stream) {
         let text = '';
         try {
@@ -203,7 +210,7 @@ export function anthropicTransport(cfg: AnthropicConfig): Transport {
       } catch (e) {
         throw networkError(e, who, url);
       }
-      if (!res.ok) throw await httpError(res, who);
+      if (!res.ok) throw await httpError(res, who, [cfg.apiKey]);
       if (stream) {
         let text = '';
         try {
@@ -274,7 +281,7 @@ export function geminiTransport(cfg: GeminiConfig): Transport {
       } catch (e) {
         throw networkError(e, who, url);
       }
-      if (!res.ok) throw await httpError(res, who);
+      if (!res.ok) throw await httpError(res, who, [cfg.apiKey]);
       const pick = (j: { candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }> }) =>
         (j.candidates?.[0]?.content?.parts ?? []).map((p) => p.text ?? '').join('');
       if (stream) {

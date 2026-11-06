@@ -2,7 +2,7 @@
  * Gaskin server entry point. `node dist/server.mjs` or `npm run dev`.
  */
 import { serve } from '@hono/node-server';
-import { loadConfig } from './config';
+import { configProblems, loadConfig } from './config';
 import { openDb } from './db';
 import { createApp } from './app';
 import { createUser } from './auth';
@@ -11,6 +11,10 @@ import { seedFacilities } from './seed';
 
 export async function start(env: Record<string, string | undefined> = process.env) {
   const cfg = loadConfig(env);
+  const problems = configProblems(cfg, env);
+  for (const p of problems) console.warn(`[gaskin] config: ${p}`);
+  if (problems.length && env.NODE_ENV === 'production' && env.GASKIN_ALLOW_UNSAFE_CONFIG !== 'yes')
+    throw new Error(`refusing to start in production with unsafe settings (${problems.length}). Fix them, or set GASKIN_ALLOW_UNSAFE_CONFIG=yes for a demo.`);
   const db = await openDb(cfg.dbUrl);
   await seedFacilities(db);
 

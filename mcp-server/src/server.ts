@@ -51,7 +51,26 @@ export function shortKey(): string {
   return Array.from(bytes, (b) => abc[b % abc.length]).join('');
 }
 
+/** A bind address other than the loopback interface exposes the connector to the network */
+export function isLoopback(host: string): boolean {
+  return host === '127.0.0.1' || host === 'localhost' || host === '::1' || host === '[::1]';
+}
+
+/** Problems that stop --http from starting; empty when safe. */
+export function httpStartProblems(cfg: Config): string[] {
+  const p: string[] = [];
+  if (!isLoopback(cfg.host)) {
+    if (!cfg.httpToken || cfg.httpToken.length < 24) p.push(`--host ${cfg.host} opens the connector to the network. Set GASKIN_HTTP_TOKEN to a random value of at least 24 characters first.`);
+    if (!cfg.allowedHosts.length) p.push(`--host ${cfg.host} needs GASKIN_ALLOWED_HOSTS set to the names clients will use.`);
+  }
+  if (cfg.allowedHosts.includes('*')) p.push('GASKIN_ALLOWED_HOSTS=* switches off the DNS-rebinding guard. List the host names instead.');
+  if (cfg.httpToken && cfg.httpToken.length < 10) p.push('GASKIN_HTTP_TOKEN is shorter than 10 characters.');
+  return p;
+}
+
 async function runHttp(cfg: Config): Promise<void> {
+  const problems = httpStartProblems(cfg);
+  if (problems.length) throw new Error(problems.join(' '));
   const { store, gaskin } = setup(cfg);
   const key = cfg.httpToken ?? shortKey();
   const allowedHosts = new Set(cfg.allowedHosts.map((h) => h.toLowerCase()));
@@ -74,7 +93,11 @@ async function runHttp(cfg: Config): Promise<void> {
       if (url.pathname !== '/mcp') return deny(res, 404, 'Not found. The connector address ends in /mcp.');
       // DNS-rebinding guard: only our own host names (plus any tunnel or hub host the facility allowed).
       const host = (req.headers.host ?? '').toLowerCase();
-      if (!allowedHosts.has(host) && !cfg.allowedHosts.includes('*')) return deny(res, 403, `Host ${host} is not allowed. Add it to GASKIN_ALLOWED_HOSTS.`);
+      if (!allowedHosts.has(host)) return deny(res, 403, `Host ${host} is not allowed. Add it to GASKIN_ALLOWED_HOSTS.`);
+      // A browser page on another site must not drive the connector (CSRF / DNS rebinding with a guessed key)
+      const origin = req.headers.origin;
+      if (origin && !/^https?:\/\/(?:127\.0\.0\.1|localhost|\[::1\])(?::\d+)?$/i.test(origin) && !cfg.allowedHosts.some((h) => origin.toLowerCase().endsWith(`//${h.toLowerCase()}`)))
+        return deny(res, 403, 'Requests from web pages on other sites are not allowed.');
       const auth = req.headers.authorization ?? '';
       const given = auth.toLowerCase().startsWith('bearer ') ? auth.slice(7).trim() : (url.searchParams.get('key') ?? '');
       if (!safeEqual(given, key)) return deny(res, 401, 'Missing or wrong access key.');
@@ -126,15 +149,17 @@ async function runHttp(cfg: Config): Promise<void> {
   log(`  Data:     ${store.file}${store.exists() ? '' : ' (not found yet)'}`);
   log(`  Address:  ${base}?key=${key}`);
   log(`  Or send the header  Authorization: Bearer ${key}  to ${base}`);
+  log('  The key in the address is a password: do not paste it into chats, screenshots or shared notes.');
   log('  This address only works on this computer. Cloud assistants (ChatGPT, claude.ai) cannot reach it without a tunnel or a facility hub.');
   // Also on stdout, so a launcher or the app can read it.
   console.log(JSON.stringify({ gaskin: 'http', url: `${base}?key=${key}`, endpoint: base, key }));
 }
 
 function safeEqual(a: string, b: string): boolean {
-  const x = Buffer.from(a);
-  const y = Buffer.from(b);
-  return x.length === y.length && crypto.timingSafeEqual(x, y);
+  // Compare digests so the comparison takes the same time whatever the lengths
+  const x = crypto.createHash('sha256').update(a).digest();
+  const y = crypto.createHash('sha256').update(b).digest();
+  return crypto.timingSafeEqual(x, y) && a.length === b.length;
 }
 
 function readJson(req: http.IncomingMessage): Promise<unknown> {

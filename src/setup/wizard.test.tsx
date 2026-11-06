@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { OnboardingWizard } from './components/OnboardingWizard';
+import { allLanguages, emergencyFor, languagesFor, listCountries } from '../ui/onboarding/geo';
 import { applySetupPlan } from './apply';
 import { recommendSetup } from './recommend';
 import { setupStore } from './store';
@@ -9,18 +10,49 @@ import { connectAssistant, setAssistantConnector } from './assistant';
 import type { GaskinStore } from '../storage';
 
 describe('OnboardingWizard (server render)', () => {
-  it('opens on the language question with large options, progress dots and setup- classes', () => {
+  it('opens on "Who will use Gaskin?" with large options, icons, a progress bar and setup-root', () => {
     const html = renderToStaticMarkup(<OnboardingWizard onComplete={() => undefined} env={{}} />);
-    expect(html).toContain('Which language do you want Gaskin in?');
-    expect(html).toContain('setup-option');
-    expect(html).toContain('setup-dot');
-    expect(html).toContain('Kiswahili');
+    expect(html).toContain('Who will use Gaskin?');
+    expect(html).toContain('setup-root');
+    expect(html).toContain('role="progressbar"');
+    expect(html).toContain('Myself or my family');
+    expect(html).toContain('A health worker');
     expect(html).toContain('<svg');
   });
 
-  it('shows the next question in the chosen language', () => {
+  it('renders in the chosen language', () => {
     const html = renderToStaticMarkup(<OnboardingWizard onComplete={() => undefined} env={{}} initialAnswers={{ workerLanguage: 'sw' }} />);
     expect(html).toContain('lang="sw"');
+  });
+});
+
+describe('languages come from the place', () => {
+  it('South Africa never offers Nigerian languages; Nigeria does', () => {
+    const nigerian = ['ha', 'yo', 'ig', 'pcm', 'bin', 'urh', 'ff'];
+    const za = languagesFor({ country: 'ZA', region: 'Gauteng' }).map((l) => l.code);
+    expect(za.length).toBeGreaterThan(0);
+    expect(za.filter((c) => nigerian.includes(c))).toEqual([]);
+    const zaAll = allLanguages({ country: 'ZA', region: 'Gauteng' }).map((l) => l.code);
+    expect(zaAll.filter((c) => nigerian.includes(c))).toEqual([]);
+    const ng = languagesFor({ country: 'NG', region: 'Lagos' }).map((l) => l.code);
+    expect(ng[0]).toBe('yo');
+    expect(ng).toContain('en');
+  });
+
+  it('a Kenyan place leads with Kiswahili, a Ghanaian one never with Hausa first', () => {
+    expect(languagesFor({ country: 'KE', region: 'Nairobi' })[0].code).toBe('sw');
+    expect(languagesFor({ country: 'GH', region: 'Ashanti' })[0].code).toBe('tw');
+  });
+
+  it('lists every country, Nigeria, Ghana and Kenya first', () => {
+    const cs = listCountries();
+    expect(cs.slice(0, 3).map((c) => c.code)).toEqual(['NG', 'GH', 'KE']);
+    expect(cs.length).toBeGreaterThan(190);
+  });
+
+  it('shows the emergency number for her country from src/legal (Ghana 112)', () => {
+    expect(emergencyFor('GH').number).toBe('112');
+    expect(emergencyFor('ZA').number).toMatch(/10177/);
   });
 });
 

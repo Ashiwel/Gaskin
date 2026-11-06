@@ -1,5 +1,5 @@
 /**
- * The synthetic caseload: 37 fictional mothers across Nigeria (25), Kenya (6)
+ * The synthetic caseload: 40 fictional mothers across Nigeria (27), Kenya (7)
  * and Ghana (6). Every name, number and story is invented. Facility names are
  * real public facilities, used for local authenticity only.
  *
@@ -1831,6 +1831,178 @@ export function buildMothers(): Mother[] {
             country: 'GH',
             bp: { s: 114, d: 72 },
           });
+        },
+      ),
+    );
+  }
+
+  // =====================================================================
+  // SEVERAL CHILDREN WITHIN THE FIRST 1,000 DAYS
+  // =====================================================================
+
+  // (s1) Ngozi Chukwu: Enugu, pregnant at 20 weeks while breastfeeding Ebube (10 months). Short birth interval.
+  {
+    const L = 20 * 7 + 2; // LMP 142 days ago
+    const ebubeAgo = 305; // 10 months
+    M.push(
+      mk(
+        {
+          id: 'm-ng-ngozic',
+          name: 'Ngozi Chukwu',
+          age: 27,
+          country: 'NG',
+          region: 'Enugu',
+          community: 'Abakpa Nike, Enugu East',
+          language: 'ig',
+          literacy: 'basic',
+          phone: { access: 'feature', number: '+234 800 000 0128', hasWhatsApp: false },
+          incomeBand: 'low',
+          occupation: 'Sells vegetables at Abakpa market',
+          householdNotes: 'Second pregnancy. Ebube (10 months) still breastfeeds day and night. Husband Ikenna is a mechanic. Her mother-in-law keeps hens in the compound and helps with Ebube on market days. The pregnancy was not planned; she had not started family planning after Ebube.',
+          ethnicity: 'Igbo',
+          religion: 'Christian (Catholic)',
+          gravida: 2,
+          parity: 1,
+          genotype: 'AA',
+          bloodGroup: 'O+',
+          heightCm: 159,
+          prePregnancyWeightKg: 55,
+          pregnancy: { lmp: lmp(20, 2), fetuses: 1, plannedBirthPlace: 'facility' },
+          practicesMentioned: ['omugwo'],
+          assignedWorkerId: 'w-ng-chioma',
+          facilityId: 'f-ng-abakpa-phc',
+          enrolledDaysAgo: ebubeAgo + 200,
+        },
+        (b) => {
+          birthAndFollowUp(b, {
+            birthDaysAgo: ebubeAgo,
+            birth: { mode: 'vaginal', place: 'facility', complications: ['none'], bloodLossMl: 350 },
+            child: { id: 'c-ngozic-1', name: 'Ebube Chukwu', sex: 'M', birthWeightKg: 3.1, gestationAtBirthWeeks: 39 },
+            country: 'NG',
+            bp: { s: 112, d: 70 },
+            feedingAt: (age) => (age < 183 ? { status: 'exclusive_breastfeeding', milkSupply: 'good' } : { status: 'complementary_with_breastmilk' }),
+          });
+          ancHistory(b, { lmpDaysAgo: L, bookingWeek: 14, country: 'NG', iptp: true, prePregnancyWeightKg: 55, bp: { s: 108, d: 68 }, hb: [10.4], genotype: 'AA', bloodGroup: 'O+', ultrasoundText: 'Single live intrauterine fetus, 18+6 weeks, placenta anterior, liquor adequate.' });
+          b.add(atWeek(L, 19), { kind: 'symptom', symptoms: ['fatigue'], severity: 'mild', via: 'visit', note: 'Tired: still breastfeeding Ebube at night and selling at the market. Asks whether breastfeeding will harm the new baby.' });
+          b.add(atWeek(L, 19), { kind: 'constraint', itemId: 'med.iron_folate', reason: 'side_effects', sideEffect: { symptoms: ['nausea', 'constipation'], severity: 'mild' }, note: 'Stopped the blood tablets for a week because of nausea.' });
+        },
+      ),
+    );
+  }
+
+  // (s2) Halima Musa: Kaduna, Zainab (3 months) and Aliyu (15 months), born 12 months apart.
+  {
+    const aliyuAgo = 456; // 15 months
+    const zainabAgo = 91; // 3 months
+    const L = zainabAgo + 39 * 7;
+    M.push(
+      mk(
+        {
+          id: 'm-ng-halimam',
+          name: 'Halima Musa',
+          age: 24,
+          country: 'NG',
+          region: 'Kaduna',
+          community: 'Kawo, Kaduna North',
+          language: 'ha',
+          literacy: 'basic',
+          phone: { access: 'shared', number: '+234 800 000 0129', hasWhatsApp: false },
+          incomeBand: 'very_low',
+          occupation: 'Makes and sells kunu at home',
+          householdNotes: 'Two children 12 months apart. Stopped breastfeeding Aliyu when she found she was pregnant with Zainab, on her mother-in-law’s advice. Husband Musa is a tricycle (keke) driver. Aliyu missed his 9-month vaccines when Zainab was born.',
+          ethnicity: 'Hausa',
+          religion: 'Muslim',
+          gravida: 2,
+          parity: 2,
+          genotype: 'AS',
+          bloodGroup: 'B+',
+          heightCm: 155,
+          prePregnancyWeightKg: 50,
+          pregnancy: { lmp: dateAgo(L), fetuses: 1, plannedBirthPlace: 'facility' },
+          practicesMentioned: ['wankan_jego'],
+          assignedWorkerId: 'w-ng-rebecca',
+          facilityId: 'f-ng-kawo-phc',
+          enrolledDaysAgo: aliyuAgo + 150,
+        },
+        (b) => {
+          birthAndFollowUp(b, {
+            birthDaysAgo: aliyuAgo,
+            birth: { mode: 'vaginal', place: 'facility', complications: ['none'], bloodLossMl: 300 },
+            child: { id: 'c-halimam-1', name: 'Aliyu Musa', sex: 'M', birthWeightKg: 3.0, gestationAtBirthWeeks: 39 },
+            country: 'NG',
+            bp: { s: 110, d: 70 },
+            skipVaccines: ['MCV1', 'YF', 'MenA'],
+            feedingAt: (age) => (age < 183 ? { status: 'exclusive_breastfeeding', milkSupply: 'good' } : age < 250 ? { status: 'complementary_with_breastmilk' } : { status: 'complementary_no_breastmilk' }),
+          });
+          ancHistory(b, { lmpDaysAgo: L, bookingWeek: 16, untilWeek: 39, country: 'NG', iptp: true, prePregnancyWeightKg: 50, bp: { s: 106, d: 66 }, hb: [10.2, 10.0], genotype: 'AS', bloodGroup: 'B+' });
+          birthAndFollowUp(b, {
+            birthDaysAgo: zainabAgo,
+            birth: { mode: 'vaginal', place: 'facility', complications: ['none'], bloodLossMl: 400 },
+            child: { id: 'c-halimam-2', name: 'Zainab Musa', sex: 'F', birthWeightKg: 2.7, gestationAtBirthWeeks: 38 },
+            country: 'NG',
+            bp: { s: 112, d: 72 },
+          });
+          b.add(20, { kind: 'constraint', itemId: 'nutr.complementary_feeding', childId: 'c-halimam-1', reason: 'cannot_afford', note: 'Cannot afford eggs or milk for Aliyu every day.' });
+        },
+      ),
+    );
+  }
+
+  // (s3) Wanjiku Njoroge: Nairobi, twins Amani and Baraka (6 weeks) and Neema (22 months).
+  {
+    const neemaAgo = 669; // 22 months
+    const twinsAgo = 42;
+    const L = twinsAgo + 36 * 7;
+    M.push(
+      mk(
+        {
+          id: 'm-ke-wanjiku',
+          name: 'Wanjiku Njoroge',
+          age: 30,
+          country: 'KE',
+          region: 'Nairobi',
+          community: 'Kariobangi North, Nairobi',
+          language: 'sw',
+          literacy: 'good',
+          phone: { access: 'smartphone', number: '+254 700 000 206', hasWhatsApp: true },
+          incomeBand: 'low',
+          occupation: 'Tailor (works from home)',
+          householdNotes: 'Twins born by caesarean at 36 weeks at Pumwani; Neema is 22 months. Husband Kamau is a matatu conductor. Her sister comes on weekends. Neema is jealous of the twins and wakes at night.',
+          children: [{ id: 'c-wanjiku-3', name: 'Baraka Njoroge', sex: 'M', dob: dateAgo(42), birthWeightKg: 2.3, gestationAtBirthWeeks: 36, feeding: 'exclusive_breastfeeding' }],
+          ethnicity: 'Kikuyu',
+          religion: 'Christian (PCEA)',
+          gravida: 2,
+          parity: 2,
+          genotype: 'unknown',
+          bloodGroup: 'A+',
+          heightCm: 164,
+          prePregnancyWeightKg: 62,
+          pregnancy: { lmp: dateAgo(L), fetuses: 2, plannedBirthPlace: 'facility' },
+          assignedWorkerId: 'w-ke-wanjiru',
+          facilityId: 'f-ke-pumwani',
+          enrolledDaysAgo: neemaAgo + 120,
+        },
+        (b) => {
+          birthAndFollowUp(b, {
+            birthDaysAgo: neemaAgo,
+            birth: { mode: 'vaginal', place: 'facility', complications: ['none'], bloodLossMl: 300 },
+            child: { id: 'c-wanjiku-1', name: 'Neema Njoroge', sex: 'F', birthWeightKg: 3.2, gestationAtBirthWeeks: 40 },
+            country: 'KE',
+            bp: { s: 114, d: 72 },
+            feedingAt: (age) => (age < 183 ? { status: 'exclusive_breastfeeding', milkSupply: 'good' } : age < 420 ? { status: 'complementary_with_breastmilk' } : { status: 'complementary_no_breastmilk' }),
+          });
+          ancHistory(b, { lmpDaysAgo: L, bookingWeek: 12, untilWeek: 36, country: 'KE', iptp: false, prePregnancyWeightKg: 62, bp: { s: 112, d: 72 }, hb: [11.2, 10.5], genotype: 'unknown', bloodGroup: 'A+', fetuses: 2, ultrasoundText: 'Live dichorionic diamniotic twins, 13+2 weeks.' });
+          for (const [id, name, sex, bw] of [['c-wanjiku-2', 'Amani Njoroge', 'M', 2.4], ['c-wanjiku-3', 'Baraka Njoroge', 'M', 2.3]] as const) {
+            birthAndFollowUp(b, {
+              secondTwin: id === 'c-wanjiku-3',
+              birthDaysAgo: twinsAgo,
+              birth: { mode: 'caesarean', place: 'facility', complications: ['preterm'], bloodLossMl: 700 },
+              child: { id, name, sex, birthWeightKg: bw, gestationAtBirthWeeks: 36 },
+              country: 'KE',
+              pncDays: [1, 3, 10],
+              bp: { s: 118, d: 76 },
+            });
+          }
         },
       ),
     );

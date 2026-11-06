@@ -9,7 +9,25 @@ import { createRequire } from 'node:module';
 import type { Channel } from '../../../src/types';
 import type { GatewaySendRequest, GatewaySendResult, MessageGateway } from './gateway';
 
-type Transport = { sendMail(o: { from: string; to: string; subject: string; text: string }): Promise<{ messageId?: string; accepted?: unknown[]; rejected?: unknown[] }> };
+/** The part of a nodemailer 10 transporter this adapter uses. */
+export type Transport = { sendMail(o: { from: string; to: string; subject: string; text: string }): Promise<{ messageId?: string; accepted?: unknown[]; rejected?: unknown[] }> };
+
+/**
+ * Hardening for every message: Gaskin sends plain text it wrote itself, so nodemailer is never
+ * allowed to read local files or fetch URLs while building a message (nodemailer 10.3 also
+ * applies these limits to raw and JSON messages, which earlier versions did not).
+ */
+export const SAFE_MAIL_OPTIONS = { disableFileAccess: true, disableUrlAccess: true } as const;
+
+/**
+ * nodemailer 10 is ES module first with a CommonJS build. It is loaded lazily so a server
+ * without SMTP configured never needs it, and kept external to the esbuild bundle.
+ */
+export function smtpTransport(url: string): Transport {
+  const require = createRequire(import.meta.url);
+  const nodemailer = require('nodemailer') as typeof import('nodemailer');
+  return nodemailer.createTransport(url, SAFE_MAIL_OPTIONS) as unknown as Transport;
+}
 
 export class SmtpGateway implements MessageGateway {
   readonly id = 'smtp_email';
@@ -21,12 +39,7 @@ export class SmtpGateway implements MessageGateway {
 
   constructor(o: { url: string; from: string }, transport?: Transport) {
     this.o = o;
-    if (transport) this.transport = transport;
-    else {
-      const require = createRequire(import.meta.url);
-      const nodemailer = require('nodemailer') as { createTransport(url: string): Transport };
-      this.transport = nodemailer.createTransport(o.url);
-    }
+    this.transport = transport ?? smtpTransport(o.url);
   }
 
   async send(req: GatewaySendRequest): Promise<GatewaySendResult> {

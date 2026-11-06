@@ -21,16 +21,16 @@ import type { CarePlan, Mother } from '../types';
 import { buildSafeContext, collectTerms, asOfFor, getPrivacyDirectory, type SafeContext, type SafeContextOptions } from './context';
 import { findLeaks, scrubText, type PrivacyCategory, type ScrubTerm } from './scrub';
 
-export { scrubText, findLeaks, ageBand, relativeDate, termRegex } from './scrub';
+export { scrubText, findLeaks, ageBand, relativeDate, termRegex, facilityNamesIn } from './scrub';
 export type { PrivacyCategory, Placeholder, ScrubTerm, ScrubResult } from './scrub';
-export { buildSafeContext, collectTerms, setPrivacyDirectory, getPrivacyDirectory, rememberMother, stageText, asOfFor } from './context';
+export { buildSafeContext, collectTerms, otherMotherTerms, otherFacilitiesIn, setPrivacyDirectory, getPrivacyDirectory, rememberMother, stageText, asOfFor } from './context';
 export type { SafeContext, SafeItem, SafeAlert, PrivacyDirectory, SafeContextOptions } from './context';
 export { recordAICall, getAIAuditLog, clearAIAuditLog, byteLength } from './audit';
 export type { AIAuditEntry } from './audit';
 export { zoneFor, COUNTRY_NAMES } from './zones';
 
 /** Placeholder -> local value, kept on the device to restore names in replies */
-export type ReidentifyMap = Partial<Record<'[MOTHER]' | '[BABY]' | '[WORKER]' | '[FACILITY]' | '[COMMUNITY]' | '[EMERGENCY_LINE]', string>>;
+export type ReidentifyMap = Partial<Record<'[MOTHER]' | '[BABY]' | '[WORKER]' | '[FACILITY]' | '[COMMUNITY]' | '[EMERGENCY_LINE]' | '[OTHER_FACILITY]', string>>;
 
 export type DeidentifyInput =
   | {
@@ -68,7 +68,7 @@ function first(name: string | undefined): string | undefined {
 
 export function buildReidentifyMap(
   mother: Mother | undefined,
-  opts: { workerName?: string; facilityName?: string; emergencyLine?: string } = {},
+  opts: { workerName?: string; facilityName?: string; emergencyLine?: string; otherFacility?: string } = {},
 ): ReidentifyMap {
   const map: ReidentifyMap = {};
   const dir = getPrivacyDirectory();
@@ -83,6 +83,8 @@ export function buildReidentifyMap(
   if (worker) map['[WORKER]'] = first(worker.replace(/^(?:Dr|Mrs|Mr|Ms|Nurse|Sister)\.?\s+/i, ''));
   if (facility) map['[FACILITY]'] = facility;
   if (opts.emergencyLine) map['[EMERGENCY_LINE]'] = opts.emergencyLine;
+  // Only when the source named exactly one other facility; otherwise it stays a placeholder and the guardrails stop it
+  if (opts.otherFacility) map['[OTHER_FACILITY]'] = opts.otherFacility;
   return map;
 }
 

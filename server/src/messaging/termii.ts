@@ -32,6 +32,8 @@ export interface TermiiOptions {
   baseUrl: string;
   route: 'dnd' | 'generic';
   webhookSecret?: string;
+  /** Refuse unsigned callbacks when no secret is configured (live mode) */
+  requireAuth?: boolean;
   fetch?: FetchFn;
 }
 
@@ -82,6 +84,7 @@ export class TermiiGateway implements MessageGateway {
   }
 
   async handleWebhook(req: WebhookRequest): Promise<WebhookResult> {
+    if (!this.o.webhookSecret && this.o.requireAuth) throw new WebhookAuthError('TERMII_WEBHOOK_SECRET is not set, so Termii callbacks are refused in live mode');
     if (this.o.webhookSecret) {
       const sig = req.headers['x-termii-signature'] ?? '';
       const want = createHmac('sha512', this.o.webhookSecret).update(req.rawBody).digest('hex');

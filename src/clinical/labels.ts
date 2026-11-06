@@ -39,6 +39,7 @@ export const SYMPTOM_LABELS: Record<SymptomCode, string> = {
   baby_lethargic: 'Baby very sleepy or floppy',
   baby_diarrhoea: 'Baby has diarrhoea',
   baby_vomiting_everything: 'Baby vomits everything',
+  pallor: 'Pale palms or eyelids',
 };
 
 export const CONDITION_LABELS: Record<ConditionCode, string> = {

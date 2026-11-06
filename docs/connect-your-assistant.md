@@ -126,11 +126,13 @@ No tool deletes data, edits or removes plan items, changes overrides, or dismiss
 
 ### Audit log
 
-`gaskin-assistant-audit.log` in the data folder holds one JSON line per tool call: `at`, `tool`, `mother` (token or null), `outcome` (`ok`, `preview`, `saved`, `error`) and `deidentified`. It holds no clinical content and no free text from the assistant.
+`gaskin-assistant-audit.log` in the data folder holds one JSON line per tool call: `at`, `tool`, `mother` (token or null), `outcome` (`ok`, `preview`, `saved`, `error`), `deidentified`, and `prev`, a short hash of the line before it. The chain shows if a line was deleted or edited (`verifyAuditChain()` in `src/store.ts` checks it). It holds no clinical content and no free text from the assistant.
+
+The server refuses to follow a symbolic link for the data file, the `backups` folder, the audit log or the token file, so a link planted in the folder cannot make it read or write elsewhere. It refuses data files over 64 MB, and says plainly when the data file is encrypted with a Gaskin passphrase, which it cannot read yet.
 
 ### HTTP mode and its limits
 
-`--http` serves the Streamable HTTP transport at `/mcp` on `127.0.0.1` with a random 10-character key, accepted as `Authorization: Bearer <key>` or `?key=<key>`, and rejects unknown `Host` headers (DNS-rebinding protection). This suits assistants running on the same computer.
+`--http` serves the Streamable HTTP transport at `/mcp` on `127.0.0.1` with a random 10-character key, accepted as `Authorization: Bearer <key>` or `?key=<key>`, rejects unknown `Host` headers (DNS-rebinding protection) and refuses requests from web pages on other sites. This suits assistants running on the same computer. It will not bind to any other address unless `GASKIN_HTTP_TOKEN` is at least 24 characters and `GASKIN_ALLOWED_HOSTS` names the hosts, and it refuses `GASKIN_ALLOWED_HOSTS=*`.
 
 Cloud-hosted assistants (ChatGPT, Claude on the web and mobile) connect from the provider's servers, so they cannot reach a laptop's `localhost`. Reaching them needs either a facility hub (a small always-on machine running this server behind HTTPS with proper authentication) or a tunnel such as Cloudflare Tunnel or ngrok. Both belong in the pilot, because they raise questions this prototype does not settle: OAuth instead of a shared key, where the hub sits, who administers it, and a data processing agreement with the AI provider. The data is pseudonymised, not anonymous, so under Nigeria's NDPA 2023, Kenya's DPA 2019 and Ghana's DPA 2012 consent and a processor agreement are still required for any cloud assistant.
 

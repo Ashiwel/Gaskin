@@ -75,6 +75,25 @@ function bool(v: string | undefined, d: boolean): boolean {
   return /^(1|true|yes|on)$/i.test(v);
 }
 
+/**
+ * Settings that are unsafe for real records. In production (NODE_ENV=production) the server refuses to
+ * start with any of them; elsewhere they are printed as warnings.
+ */
+export function configProblems(cfg: ServerConfig, env: Record<string, string | undefined> = process.env): string[] {
+  const p: string[] = [];
+  if (cfg.corsOrigins.includes('*')) p.push("CORS_ORIGINS='*' lets any web page call the API with a worker's token. List the front end's own origin.");
+  if (!env.AUDIT_IP_SALT || env.AUDIT_IP_SALT.length < 16) p.push('AUDIT_IP_SALT is missing or short, so hashed IP addresses change on every restart and are easier to reverse. Set a long random value.');
+  if (!/^https:\/\//.test(cfg.publicUrl) && !/localhost|127\.0\.0\.1/.test(cfg.publicUrl)) p.push('PUBLIC_URL is not https. Put the server behind TLS.');
+  if (cfg.messaging.mode === 'live') {
+    if (cfg.messaging.creds.whatsapp && !cfg.messaging.creds.whatsapp.appSecret) p.push('WHATSAPP_APP_SECRET is not set, so anyone can post fake WhatsApp messages and receipts to /webhooks/whatsapp.');
+    if (cfg.messaging.creds.termii && !env.TERMII_WEBHOOK_SECRET) p.push('TERMII_WEBHOOK_SECRET is not set, so anyone can post fake Termii receipts and inbound SMS.');
+    if (cfg.messaging.creds.africastalking && !env.AT_WEBHOOK_TOKEN) p.push("AT_WEBHOOK_TOKEN is not set, so anyone can post fake Africa's Talking receipts and inbound SMS. Add ?token=… to the callback URLs.");
+  }
+  if (cfg.suppressBelow < 5) p.push('SUPPRESS_BELOW is under 5, so public counts can identify individual women.');
+  if (cfg.ai.baseUrl && cfg.ai.residency === 'offshore' && !env.AI_PROCESSOR_AGREEMENT) p.push('AI_RESIDENCY=offshore without AI_PROCESSOR_AGREEMENT=yes: prompts leave the country without a recorded processor agreement.');
+  return p;
+}
+
 export function loadConfig(env: Record<string, string | undefined> = process.env): ServerConfig {
   const port = num(env.PORT, 8787);
   const quiet = env.QUIET_HOURS === 'off' ? null : (env.QUIET_HOURS ?? '20-8').split('-').map((x) => num(x, NaN));

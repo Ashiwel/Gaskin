@@ -21,6 +21,9 @@ import type { HostedRole, Identity } from '../../src/hosted/syncTypes';
 import type { CountryCode } from '../../src/types';
 import { type DB, nowIso } from './db';
 
+/** Sessions unused for this long need a fresh sign-in */
+export const IDLE_DAYS = 14;
+
 export const ROLES: HostedRole[] = ['worker', 'supervisor', 'clinical_reviewer', 'programme_officer', 'admin'];
 
 export interface UserRow {
@@ -132,6 +135,7 @@ export async function login(
   pin: string,
   device?: { id?: string; name?: string },
 ): Promise<LoginResult> {
+  if (typeof pin !== 'string' || pin.length > 16) return { ok: false, reason: 'invalid' };
   const phone = normalisePhone(phoneIn, cfg.defaultCountry);
   const u = await db.get<UserRow>('SELECT * FROM users WHERE phone = ?', [phone]);
   const now = new Date();
@@ -182,12 +186,49 @@ export async function authenticate(db: DB, token: string | undefined): Promise<A
     [sha256(token)],
   );
   if (!s || new Date(s.expires_at) < new Date()) return null;
+  // Idle timeout: a phone that has not been used for 14 days must sign in again
+  if (s.last_seen_at && Date.now() - new Date(s.last_seen_at).getTime() > IDLE_DAYS * 86_400_000) return null;
   const u = await db.get<UserRow>('SELECT * FROM users WHERE id = ? AND active = 1', [s.user_id]);
   if (!u) return null;
   // Touch at most once a minute
   if (!s.last_seen_at || Date.now() - new Date(s.last_seen_at).getTime() > 60_000)
     await db.run('UPDATE sessions SET last_seen_at = ? WHERE token_hash = ?', [nowIso(), sha256(token)]);
   return toAuthed(db, u, s.device_id);
+}
+
+/**
+ * Replace a session token with a fresh one carrying a fresh expiry. The old token stops working at once.
+ * A session can be renewed for at most 90 days from sign-in, so a stolen token cannot live for ever.
+ */
+export async function rotateSession(db: DB, token: string, tokenDays: number, maxAgeDays = 90): Promise<{ token: string; expiresAt: string } | null> {
+  const s = await db.get<{ user_id: string; device_id: string | null; device_name: string | null; created_at: string; expires_at: string }>(
+    'SELECT user_id, device_id, device_name, created_at, expires_at FROM sessions WHERE token_hash = ?',
+    [sha256(token)],
+  );
+  const now = Date.now();
+  if (!s || new Date(s.expires_at).getTime() < now) return null;
+  const hardStop = new Date(s.created_at).getTime() + maxAgeDays * 86_400_000;
+  if (now > hardStop) return null;
+  const next = randomBytes(32).toString('base64url');
+  const expiresAt = new Date(Math.min(now + tokenDays * 86_400_000, hardStop)).toISOString();
+  await db.tx(async (t) => {
+    await t.run('DELETE FROM sessions WHERE token_hash = ?', [sha256(token)]);
+    await t.run('INSERT INTO sessions (token_hash, user_id, device_id, device_name, created_at, expires_at, last_seen_at) VALUES (?, ?, ?, ?, ?, ?, ?)', [
+      sha256(next),
+      s.user_id,
+      s.device_id,
+      s.device_name,
+      s.created_at,
+      expiresAt,
+      new Date(now).toISOString(),
+    ]);
+  });
+  return { token: next, expiresAt };
+}
+
+/** Sign a worker out everywhere (lost phone, PIN reset, leaver) */
+export async function revokeAllSessions(db: DB, userId: string): Promise<number> {
+  return (await db.run('DELETE FROM sessions WHERE user_id = ?', [userId])).changes;
 }
 
 export async function logout(db: DB, token: string): Promise<void> {

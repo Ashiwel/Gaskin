@@ -1,4 +1,4 @@
-import type { Child, Citation, ClinicalEvent, CountryCode, IllustrationKey, LabTest, Mother, SymptomCode, VisitEvent } from '../types';
+import type { Child, Citation, ClinicalEvent, ConstraintReason, CountryCode, HowTo, IllustrationKey, LabTest, Mother, SymptomCode, VisitEvent } from '../types';
 import type { Facts } from '../engine/facts';
 import type { VisitTemplate } from './catalogue';
 
@@ -105,6 +105,18 @@ export interface ChecklistItem {
   next?: { date: string; label: string; templateId?: string };
   /** Facts about her or the baby that added or changed this item */
   because?: string[];
+  /** Visits v2: items that open when this item's answer is one of `answerIn` (status, choice value, or 'not_available' | 'declined' | 'not_done_today') */
+  followUps?: Array<{ when: { answerIn: string[] }; items: ChecklistItem[] }>;
+  /** Visits v2: steps and examples for tell items and actions */
+  howTo?: HowTo;
+  /** Visits v2: a test item; offers Done, Not available, Declined, Not done today. A missing result is unknown, never normal. */
+  isTest?: boolean;
+  /** Visits v2: the plan item or constraint target this item records against (e.g. 'med.iron_folate', 'test.haemoglobin') */
+  constraintTarget?: string;
+  /** Visits v2: choice value or status that records a ConstraintEvent with this reason */
+  constraintOn?: Record<string, ConstraintReason>;
+  /** Visits v2: GUIDES id the summary can open */
+  guideId?: string;
 }
 
 export interface ChecklistSection {
@@ -123,7 +135,9 @@ export interface VisitChecklist {
   stage: VisitTemplate['stage'];
   visitType: VisitEvent['visitType'];
   contactNumber?: number;
-  children: Array<{ id: string; name: string; ageDays: number; ageLabel: string; correctedAgeDays?: number }>;
+  children: Array<{ id: string; name: string; ageDays: number; ageLabel: string; correctedAgeDays?: number; templateId?: string; templateLabel?: string }>;
+  /** The same items grouped by person: the mother first, then each child (youngest first), each with its own sections. */
+  bySubject?: Array<{ childId?: string; title: string; sections: ChecklistSection[] }>;
   /** Short facts for the header, e.g. '26 weeks', 'Sickle cell disease' */
   context: string[];
   /** Why the list differs from the standard template */
@@ -140,7 +154,7 @@ export interface VisitChecklist {
 /** A recorded answer for one item. */
 export interface ChecklistResult {
   itemId: string;
-  status: 'normal' | 'abnormal' | 'yes' | 'no' | 'done' | 'not_done' | 'told' | 'achieved' | 'not_yet' | 'booked' | 'not_checked' | 'value';
+  status: 'normal' | 'abnormal' | 'yes' | 'no' | 'done' | 'not_done' | 'told' | 'achieved' | 'not_yet' | 'booked' | 'not_checked' | 'value' | 'not_available' | 'declined' | 'not_done_today';
   /** Number items, EPDS total, systolic for BP */
   value?: number;
   /** Diastolic for BP */
@@ -154,6 +168,20 @@ export interface ChecklistResult {
   /** Book item: chosen date */
   date?: string;
   note?: string;
+}
+
+/** Visits v2: what the summary screen shows and offers. */
+export interface ChecklistSummary {
+  abnormal: Finding[];
+  /** Findings whose action is recheck */
+  rechecks: Array<{ itemId: string; label: string }>;
+  /** Active items with no answer; important = priority 1–2, a test, or a danger-sign question */
+  unanswered: Array<{ itemId: string; label: string; important: boolean }>;
+  /** Tests with no result (not available, declined, not done today) and what that means */
+  unknowns: Array<{ itemId: string; label: string; status: 'not_available' | 'declined' | 'not_done_today' | 'unanswered'; consequence: string; referToday: boolean }>;
+  recommendations: Array<{ text: string; guideId?: string; itemId?: string }>;
+  /** One line per child, for multi-child visits */
+  perChild: Array<{ childId: string; name: string; answered: number; total: number; findings: number }>;
 }
 
 /** An abnormal finding evaluated from a result. */

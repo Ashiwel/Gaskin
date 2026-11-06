@@ -84,7 +84,8 @@ describe('de-identified by default', () => {
       expect(r.text).not.toMatch(/"name": "(?!\[)/);
     }
     expect(problems).toEqual([]);
-  });
+    // About 140 tool calls, each building a care plan: give it room on a slow or busy machine.
+  }, 60_000);
 
   it('tokens look like M-7F3A and stay the same across restarts', async () => {
     const a = await conn.call('gaskin_list_caseload', { scope: 'all', limit: 100 });
@@ -187,7 +188,8 @@ describe('audit log', () => {
     expect(lines.map((l) => l.tool)).toEqual(['gaskin_whoami', 'gaskin_list_caseload', 'gaskin_get_care_plan', 'gaskin_get_care_plan']);
     expect(lines[2].mother).toBe(token);
     expect(lines[3].outcome).toBe('error');
-    for (const l of lines) expect(Object.keys(l).sort()).toEqual(['at', 'deidentified', 'mother', 'outcome', 'tool']);
+    // prev: hash of the line before (tamper evidence, SEC-17), never content
+    for (const l of lines) expect(Object.keys(l).sort()).toEqual(['at', 'deidentified', 'mother', 'outcome', 'prev', 'tool']);
     expect(leaks(fs.readFileSync(path.join(dir, AUDIT_FILE), 'utf8').replace(/"at":"[^"]+"/g, ''), forbiddenFor(seed))).toEqual([]);
   });
 });

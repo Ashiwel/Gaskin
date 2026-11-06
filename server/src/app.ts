@@ -36,7 +36,7 @@ import { parseSymptomsFromText } from '../../src/messaging';
 import type { ServerConfig } from './config';
 import type { DB } from './db';
 import { nowIso, upsert } from './db';
-import { type AuthedUser, CAN, authenticate, createUser, login, logout, normalisePhone, toIdentity, ROLES } from './auth';
+import { type AuthedUser, CAN, authenticate, createUser, login, logout, normalisePhone, rotateSession, toIdentity, ROLES } from './auth';
 import { audit } from './audit';
 import { Store } from './store';
 import { MessagingService } from './messaging/service';
@@ -122,10 +122,27 @@ export function createApp(deps: AppDeps): GaskinServer {
 
   // ---------- Middleware ----------
 
-  app.use('*', secureHeaders({ crossOriginResourcePolicy: 'cross-origin' }));
+  // The server serves JSON, SSE and webhook replies, never pages, so its CSP forbids everything,
+  // including being framed (clickjacking) and loading anything.
+  app.use(
+    '*',
+    secureHeaders({
+      crossOriginResourcePolicy: 'cross-origin',
+      contentSecurityPolicy: { defaultSrc: ["'none'"], frameAncestors: ["'none'"], baseUri: ["'none'"], formAction: ["'none'"] },
+      xFrameOptions: 'DENY',
+      strictTransportSecurity: 'max-age=31536000; includeSubDomains',
+      permissionsPolicy: { camera: [], microphone: [], geolocation: [] },
+    }),
+  );
+  // Responses hold health records: no shared cache, proxy or browser history may keep them
+  app.use('/api/*', async (c, next) => {
+    await next();
+    if (c.req.path !== '/api/public/metrics' && c.req.path !== '/api/config') c.header('Cache-Control', 'no-store');
+  });
   app.use(
     '/api/*',
     cors({
+      // '*' reflects any origin and is for local development only; loadConfig refuses it in production
       origin: (origin) => (cfg.corsOrigins.includes('*') ? origin : cfg.corsOrigins.includes(origin) ? origin : null) ?? '',
       allowHeaders: ['Authorization', 'Content-Type', 'X-Device-Id'],
       allowMethods: ['GET', 'POST', 'PUT', 'OPTIONS'],
@@ -136,7 +153,9 @@ export function createApp(deps: AppDeps): GaskinServer {
 
   const requireAuth = async (c: Context<Env>, next: () => Promise<void>) => {
     const h = c.req.header('authorization') ?? '';
-    const q = c.req.query('token'); // EventSource cannot set headers
+    // EventSource cannot set headers, so /api/events alone may carry the token in the query string.
+    // Everywhere else a query token is refused: URLs end up in proxy logs, history and Referer headers.
+    const q = c.req.path === '/api/events' ? c.req.query('token') : undefined;
     const token = h.startsWith('Bearer ') ? h.slice(7) : (q ?? '');
     const user = await authenticate(db, token);
     if (!user) return c.json({ error: 'unauthorised', message: 'Please sign in again.' }, 401);
@@ -145,19 +164,26 @@ export function createApp(deps: AppDeps): GaskinServer {
     await next();
   };
 
-  // Login rate limit per IP, on top of the per-account lock
-  const attempts = new Map<string, { n: number; reset: number }>();
-  const tooMany = (ip: string | undefined) => {
-    const k = ip ?? 'unknown';
-    const now = Date.now();
-    const a = attempts.get(k);
-    if (!a || a.reset < now) {
-      attempts.set(k, { n: 1, reset: now + 15 * 60_000 });
-      return false;
-    }
-    a.n++;
-    return a.n > 30;
+  // Login rate limit per IP and per phone number, on top of the per-account lock. The per-number
+  // limit also slows an attacker who rotates addresses to guess one worker's PIN, and an attacker who
+  // tries one PIN across many numbers is held by the per-IP limit. Both maps are bounded.
+  const limiter = (max: number, windowMs: number, cap = 10_000) => {
+    const m = new Map<string, { n: number; reset: number }>();
+    return (key: string): boolean => {
+      const now = Date.now();
+      const a = m.get(key);
+      if (!a || a.reset < now) {
+        if (m.size >= cap) for (const [k, v] of m) if (v.reset < now || m.size >= cap) m.delete(k); else break;
+        m.set(key, { n: 1, reset: now + windowMs });
+        return false;
+      }
+      a.n++;
+      return a.n > max;
+    };
   };
+  const ipLimit = limiter(30, 15 * 60_000);
+  const phoneLimit = limiter(10, 15 * 60_000);
+  const tooMany = (ip: string | undefined) => ipLimit(ip ?? 'unknown');
 
   // ---------- Public ----------
 
@@ -187,7 +213,8 @@ export function createApp(deps: AppDeps): GaskinServer {
     const ip = ipOf(c, cfg.trustProxy);
     if (tooMany(ip)) return c.json({ error: 'rate_limited', message: 'Too many sign-in attempts from this network. Wait 15 minutes.' }, 429);
     const b = (await c.req.json().catch(() => ({}))) as Partial<LoginRequest>;
-    if (typeof b.phone !== 'string' || typeof b.pin !== 'string') return c.json({ error: 'invalid', message: 'Enter your phone number and PIN.' }, 400);
+    if (typeof b.phone !== 'string' || typeof b.pin !== 'string' || b.phone.length > 32 || b.pin.length > 16) return c.json({ error: 'invalid', message: 'Enter your phone number and PIN.' }, 400);
+    if (phoneLimit(normalisePhone(b.phone, cfg.messaging.defaultCountry))) return c.json({ error: 'rate_limited', message: 'Too many sign-in attempts for this number. Wait 15 minutes.' }, 429);
     const r = await login(db, { ...cfg, defaultCountry: cfg.messaging.defaultCountry }, b.phone, b.pin, { id: b.deviceId, name: b.deviceName });
     if (!r.ok) {
       await audit(db, { action: 'auth.login', outcome: 'denied', ip, detail: { reason: r.reason } });
@@ -213,6 +240,16 @@ export function createApp(deps: AppDeps): GaskinServer {
   });
 
   app.get('/api/me', (c) => c.json(toIdentity(c.get('user'))));
+
+  // Swap the session token for a fresh one (the app calls this weekly and after a role change),
+  // so a token copied from an old phone stops working without the worker signing in again.
+  app.post('/api/auth/refresh', async (c) => {
+    const user = c.get('user');
+    const r = await rotateSession(db, c.get('token'), cfg.tokenDays);
+    if (!r) return c.json({ error: 'unauthorised', message: 'Please sign in again.' }, 401);
+    await audit(db, { userId: user.id, role: user.role, action: 'auth.refresh', outcome: 'ok' });
+    return c.json({ token: r.token, expiresAt: r.expiresAt, user: toIdentity(user) });
+  });
 
   app.get('/api/snapshot', async (c) => {
     const user = c.get('user');
@@ -325,7 +362,8 @@ export function createApp(deps: AppDeps): GaskinServer {
     const user = c.get('user');
     if (!CAN.writeRecords(user.role)) return c.json({ error: 'forbidden', message: 'Your role cannot use the AI service.' }, 403);
     const req = (await c.req.json().catch(() => null)) as AIProxyRequest | null;
-    if (!req) return c.json({ error: 'invalid', message: 'Invalid request.' }, 400);
+    if (!req || typeof req.prompt !== 'string' || req.prompt.length > 64_000 || (req.motherId !== undefined && typeof req.motherId !== 'string')) return c.json({ error: 'invalid', message: 'Invalid request.' }, 400);
+    if (req.task !== undefined && !['personalise', 'translate', 'extract', 'explain', 'suggest', 'back_translate'].includes(String(req.task))) return c.json({ error: 'invalid', message: 'Unknown AI task.' }, 400);
     const ip = ipOf(c, cfg.trustProxy);
     if (req.stream) {
       return streamSSE(c, async (s) => {
@@ -347,8 +385,11 @@ export function createApp(deps: AppDeps): GaskinServer {
 
   app.post('/api/ai/preview', async (c) => {
     const user = c.get('user');
+    const user0 = c.get('user');
+    // Preview runs the same scrub as a real call and returns which identifiers it found, so it needs the same role
+    if (!CAN.writeRecords(user0.role)) return c.json({ error: 'forbidden', message: 'Your role cannot use the AI service.' }, 403);
     const req = (await c.req.json().catch(() => null)) as AIProxyRequest | null;
-    if (!req?.prompt) return c.json({ error: 'invalid' }, 400);
+    if (!req?.prompt || typeof req.prompt !== 'string' || req.prompt.length > 64_000) return c.json({ error: 'invalid' }, 400);
     try {
       const d = await ai.deidentifyPrompt(user, req);
       return c.json({ text: d.text, removed: d.removed, leaks: d.leaks, wouldSend: ai.enabled && !d.leaks.length, model: cfg.ai.model, residency: cfg.ai.residency });
@@ -357,12 +398,15 @@ export function createApp(deps: AppDeps): GaskinServer {
     }
   });
 
+  const settingKey = (k: string) => /^[A-Za-z0-9._-]{1,80}$/.test(k);
   app.get('/api/settings/:key', async (c) => {
+    if (!settingKey(c.req.param('key'))) return c.json({ error: 'invalid' }, 400);
     const row = await db.get<{ value: string }>('SELECT value FROM user_settings WHERE user_id = ? AND key = ?', [c.get('user').id, c.req.param('key')]);
     return c.json({ value: row ? JSON.parse(row.value) : null });
   });
 
   app.put('/api/settings/:key', async (c) => {
+    if (!settingKey(c.req.param('key'))) return c.json({ error: 'invalid' }, 400);
     const b = (await c.req.json().catch(() => ({}))) as { value?: unknown };
     const v = JSON.stringify(b.value ?? null);
     if (v.length > 64 * 1024) return c.json({ error: 'too_large' }, 413);
@@ -406,8 +450,9 @@ export function createApp(deps: AppDeps): GaskinServer {
   app.get('/api/reports/costs', async (c) => {
     const user = c.get('user');
     if (!CAN.costs(user.role)) return c.json({ error: 'forbidden' }, 403);
-    const from = c.req.query('from') ?? '1970-01-01';
-    const to = c.req.query('to') ?? '9999-12-31';
+    const isDay = (x: string | undefined) => !!x && /^\d{4}-\d{2}-\d{2}/.test(x) && !Number.isNaN(Date.parse(x));
+    const from = isDay(c.req.query('from')) ? c.req.query('from')! : '1970-01-01';
+    const to = isDay(c.req.query('to')) ? c.req.query('to')! : '9999-12-31';
     const rows = await db.all(
       `SELECT channel, provider, currency, source, COUNT(DISTINCT message_id) AS messages, SUM(units) AS units, SUM(cost_local) AS cost_local, SUM(cost_usd) AS cost_usd
        FROM message_costs WHERE at >= ? AND at <= ? GROUP BY channel, provider, currency, source ORDER BY channel, provider`,
@@ -433,13 +478,19 @@ export function createApp(deps: AppDeps): GaskinServer {
     const user = c.get('user');
     if (!CAN.manageUsers(user.role)) return c.json({ error: 'forbidden' }, 403);
     const b = (await c.req.json().catch(() => ({}))) as Parameters<typeof createUser>[1];
-    if (!b.phone || !b.pin || !b.name || !ROLES.includes(b.role) || !Array.isArray(b.facilityIds)) return c.json({ error: 'invalid', message: 'phone, pin, name, role and facilityIds are required.' }, 400);
+    if (typeof b.phone !== 'string' || typeof b.pin !== 'string' || typeof b.name !== 'string' || !b.name.trim() || b.name.length > 120 || !ROLES.includes(b.role) || !Array.isArray(b.facilityIds) || b.facilityIds.length > 200 || !b.facilityIds.every((f) => typeof f === 'string' && f.length <= 120))
+      return c.json({ error: 'invalid', message: 'phone, pin, name, role and facilityIds are required.' }, 400);
+    const known = new Set((await db.all<{ id: string }>('SELECT id FROM facilities')).map((r) => r.id));
+    const unknownFac = b.facilityIds.find((f) => !known.has(f));
+    if (unknownFac) return c.json({ error: 'invalid', message: `Unknown facility ${unknownFac}. Create it first.` }, 400);
     try {
       const id = await createUser(db, b);
       await audit(db, { userId: user.id, role: user.role, action: 'admin.user.create', entity: 'user', entityId: id, outcome: 'ok', detail: { role: b.role, facilities: b.facilityIds.length } });
       return c.json({ id });
     } catch (e) {
-      return c.json({ error: 'invalid', message: (e as Error).message.includes('UNIQUE') || (e as Error).message.includes('unique') ? 'That phone number already has an account.' : (e as Error).message }, 400);
+      // Never echo a database error: it can carry SQL, table names or another account's details
+      const msg = (e as Error).message;
+      return c.json({ error: 'invalid', message: /unique/i.test(msg) ? 'That phone number already has an account.' : /PIN|role/.test(msg) ? msg : 'The account could not be created.' }, 400);
     }
   });
 
@@ -447,7 +498,8 @@ export function createApp(deps: AppDeps): GaskinServer {
     const user = c.get('user');
     if (!CAN.manageUsers(user.role)) return c.json({ error: 'forbidden' }, 403);
     const b = (await c.req.json().catch(() => ({}))) as { id?: string; name?: string; country?: string; region?: string; dhis2OrgUnit?: string };
-    if (!b.id || !b.name || !b.country) return c.json({ error: 'invalid', message: 'id, name and country are required.' }, 400);
+    if (typeof b.id !== 'string' || !/^[A-Za-z0-9._-]{1,120}$/.test(b.id) || typeof b.name !== 'string' || !b.name.trim() || b.name.length > 200 || !['NG', 'KE', 'GH'].includes(String(b.country)))
+      return c.json({ error: 'invalid', message: 'id (letters, digits, dot, dash), name and country (NG, KE or GH) are required.' }, 400);
     await db.run(upsert(db, 'facilities', ['id', 'name', 'country', 'region', 'dhis2_org_unit'], ['id']), [b.id, b.name, b.country, b.region ?? null, b.dhis2OrgUnit ?? null]);
     await audit(db, { userId: user.id, role: user.role, action: 'admin.facility.upsert', entity: 'facility', entityId: b.id, outcome: 'ok' });
     ai.invalidate();

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ILLUSTRATION_KEYS, renderHandoutHTML, renderIllustration } from './index';
+import { HANDOUT_CSP, ILLUSTRATION_KEYS, renderHandoutHTML, renderIllustration } from './index';
 import { sampleHandoutInput } from './sample';
 
 describe('renderIllustration', () => {
@@ -64,6 +64,34 @@ describe('renderHandoutHTML', () => {
     expect(html).not.toContain('<img');
     expect(html).toContain('&lt;script&gt;alert(1)&lt;/script&gt;');
     expect(html).toContain('&lt;/p&gt;&lt;script&gt;bad()&lt;/script&gt;');
+  });
+
+  it('security: an unknown or crafted illustration key never reaches the markup (SEC-01)', () => {
+    const evil = 'x"><script>alert(1)</script><img src=x onerror=alert(2)>';
+    const svg = renderIllustration(evil as never, { size: '1" onload="alert(3)' as never });
+    expect(svg).not.toContain('<script');
+    expect(svg).not.toContain('<img');
+    expect(svg).not.toContain('onload');
+    expect(svg).toContain('data-illustration="unknown"');
+    expect(svg).toContain('width="120"');
+    // A prototype key is not a drawing either
+    expect(renderIllustration('constructor' as never)).toContain('data-illustration="unknown"');
+
+    const input = sampleHandoutInput();
+    input.items[0] = { ...input.items[0], illustration: evil as never };
+    const html = renderHandoutHTML(input);
+    expect(html).not.toContain('<script');
+    expect(html).not.toContain('<img');
+    expect(html).not.toContain('onerror');
+  });
+
+  it('security: the handout carries a CSP that forbids scripts and network, and sets dir for Arabic', () => {
+    const html = renderHandoutHTML({ ...sampleHandoutInput(), language: 'ar' });
+    expect(html).toContain(`<meta http-equiv="Content-Security-Policy" content="${HANDOUT_CSP}">`);
+    expect(HANDOUT_CSP).toContain("default-src 'none'");
+    expect(HANDOUT_CSP).not.toMatch(/script-src|unsafe-eval/);
+    expect(html).toMatch(/<html lang="ar" dir="rtl">/);
+    expect(renderHandoutHTML(sampleHandoutInput())).toMatch(/<html lang="[a-z]+" dir="ltr">/);
   });
 
   it('uses the infant stage line after birth', () => {

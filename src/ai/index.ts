@@ -183,3 +183,7 @@ function buildPreview(task: PreviewTask, args: Record<string, unknown>): AIPrevi
 }
 
 registerPreviewBuilder(buildPreview);
+
+// ---------- Where the worker's own key is kept (see keyStore.ts for the UI wiring) ----------
+export { saveAISettings, loadAISettings, forgetAIKey, keyPersistence, needsKeyAgain, AI_SETTINGS_STORAGE_KEY } from './keyStore';
+export type { KeyPersistence } from './keyStore';

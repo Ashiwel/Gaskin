@@ -314,6 +314,8 @@ export interface BirthOptions {
   epds?: number;
   /** Birth vaccines given late (home birth): day of first facility contact */
   birthVaccinesDay?: number;
+  /** Second twin: the visits, maternal vitals and screens are already recorded for the first twin */
+  secondTwin?: boolean;
 }
 
 export function birthAndFollowUp(b: EventBuilder, o: BirthOptions): { birth: Birth; child: Child } {
@@ -324,7 +326,7 @@ export function birthAndFollowUp(b: EventBuilder, o: BirthOptions): { birth: Bir
   const cid = child.id;
   const atFacility = birth.place === 'facility';
 
-  b.add(o.birthDaysAgo, {
+  if (!o.secondTwin) b.add(o.birthDaysAgo, {
     kind: 'birth',
     birth,
     child,
@@ -357,18 +359,20 @@ export function birthAndFollowUp(b: EventBuilder, o: BirthOptions): { birth: Bir
     const d = o.birthDaysAgo - day;
     if (d < 1) continue;
     const home = !atFacility || (day >= 3 && day <= 14 && r() < 0.5);
-    b.visit(d, home ? 'home_visit' : 'pnc', { note: `Postnatal check, day ${day}.` });
-    b.vitals(d, {
-      systolic: Math.round(o.bp.s + (r() * 8 - 4)),
-      diastolic: Math.round(o.bp.d + (r() * 6 - 3)),
-      temperatureC: round1(36.5 + r() * 0.5),
-      pulse: int(r, 74, 92),
-    });
+    if (!o.secondTwin) {
+      b.visit(d, home ? 'home_visit' : 'pnc', { note: `Postnatal check, day ${day}.` });
+      b.vitals(d, {
+        systolic: Math.round(o.bp.s + (r() * 8 - 4)),
+        diastolic: Math.round(o.bp.d + (r() * 6 - 3)),
+        temperatureC: round1(36.5 + r() * 0.5),
+        pulse: int(r, 74, 92),
+      });
+    }
     b.vitals(d, { childId: cid, temperatureC: round1(36.6 + r() * 0.5) });
     b.add(d, { kind: 'growth', childId: cid, weightKg: weightAt(day), lengthCm: day >= 7 ? expectedLength(day, child.sex) : undefined, headCircumferenceCm: day >= 7 ? expectedHead(day, child.sex) : undefined });
     feed(day, d);
-    if (day >= 7 && day <= 14 && o.epds !== undefined) b.add(d, { kind: 'screening', instrument: 'epds', score: o.epds });
-    if (day >= 42) b.add(d, { kind: 'screening', instrument: 'epds', score: int(r, 2, 7) });
+    if (!o.secondTwin && day >= 7 && day <= 14 && o.epds !== undefined) b.add(d, { kind: 'screening', instrument: 'epds', score: o.epds });
+    if (!o.secondTwin && day >= 42) b.add(d, { kind: 'screening', instrument: 'epds', score: int(r, 2, 7) });
   }
 
   // ---- EPI visits with growth monitoring ----
@@ -379,7 +383,7 @@ export function birthAndFollowUp(b: EventBuilder, o: BirthOptions): { birth: Bir
     const d = ageNow - age;
     if (d < 1) continue;
     const vaccines = v.vaccines.filter((x) => !(o.skipVaccines ?? []).some((s) => x.startsWith(s)));
-    b.visit(d, 'child_health', { note: `Immunisation visit (${v.label}).` });
+    if (!o.secondTwin) b.visit(d, 'child_health', { note: `Immunisation visit (${v.label}).` });
     if (vaccines.length) b.add(d, { kind: 'immunisation', vaccines, childId: cid });
     b.add(d, {
       kind: 'growth',

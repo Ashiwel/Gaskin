@@ -55,8 +55,19 @@ const DANGER_KEYS: IllustrationKey[] = [
 ];
 
 function illustrationFor(item: PlanItem): IllustrationKey {
-  return item.illustration ?? CATEGORY_ILLUSTRATION[item.category];
+  const own = item.illustration;
+  if (own && Object.prototype.hasOwnProperty.call(ILLUSTRATION_LABELS, own)) return own;
+  return CATEGORY_ILLUSTRATION[item.category] ?? 'talk_to_someone';
 }
+
+/** Right-to-left languages among the mother languages Gaskin supports */
+const RTL_LANGS = new Set(['ar']);
+
+/**
+ * The handout is shown in an iframe and printed. It never needs scripts, network or forms, so
+ * its own CSP forbids them: even if escaping ever failed, injected markup could not run or phone home.
+ */
+export const HANDOUT_CSP = "default-src 'none'; style-src 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none'";
 
 /** Short 3-8 word label for a card. */
 function shortLabel(item: PlanItem): string {
@@ -216,10 +227,12 @@ export function renderHandoutHTML(input: HandoutInput): string {
     `<div><b>Date:</b> ${escapeHtml(formatDate(plan.generatedAt))}</div>`,
   ].join('');
 
+  const dir = RTL_LANGS.has(input.language) ? 'rtl' : 'ltr';
   return `<!doctype html>
-<html lang="${escapeHtml(input.language)}">
+<html lang="${escapeHtml(input.language)}" dir="${dir}">
 <head>
 <meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="${HANDOUT_CSP}">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${escapeHtml(brandName)} – ${escapeHtml(first)}</title>
 <style>${CSS}</style>

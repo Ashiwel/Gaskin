@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 
 export type PatientTab = 'plan' | 'timeline' | 'history' | 'baby' | 'messages';
 export type Sheet = 'record' | 'compose' | 'handout' | null;
@@ -8,17 +8,34 @@ export type Route =
   | { name: 'patient'; id: string; tab: PatientTab; sheet?: Sheet; itemIds?: string[] }
   | { name: 'phone'; id?: string }
   | { name: 'review' }
-  | { name: 'dashboard' }
+  | { name: 'insights' }
+  | { name: 'mothers' }
+  | { name: 'visits' }
+  | { name: 'design' }
   | { name: 'library'; page?: 'practices' | 'how' | 'sources' }
   | { name: 'settings' }
   | { name: 'register' }
   | { name: 'visit'; id: string; childId?: string }
   | { name: 'about' };
 
-const SECTIONS = ['today', 'phone', 'review', 'dashboard', 'library', 'settings', 'about', 'register'] as const;
+const SECTIONS = ['today', 'mothers', 'visits', 'phone', 'review', 'insights', 'library', 'settings', 'about', 'register', 'design'] as const;
 
 // claude.ai reserves some hash names (settings, downloads...), so sections get their own.
-const HASH: Record<string, string> = { today: 'today', phone: 'her-phone', review: 'review', dashboard: 'programme', library: 'library', settings: 'ai-and-data', about: 'about', register: 'register' };
+const HASH: Record<string, string> = {
+  today: 'today',
+  mothers: 'mothers',
+  visits: 'visits',
+  phone: 'her-phone',
+  review: 'review',
+  insights: 'insights',
+  library: 'library',
+  settings: 'ai-and-data',
+  about: 'about',
+  register: 'register',
+  design: 'design',
+};
+/** Old links keep working. */
+const HASH_ALIASES: Record<string, string> = { programme: 'insights', dashboard: 'insights' };
 
 function hashFor(r: Route): string {
   if (r.name === 'patient' || r.name === 'visit') return `#mother-${r.id.replace(/[^a-zA-Z0-9-]/g, '-')}`;
@@ -37,7 +54,8 @@ function routeFromHash(motherIds: string[]): Route {
     const id = motherIds.find((m) => m.replace(/[^a-zA-Z0-9-]/g, '-') === slug);
     if (id) return { name: 'patient', id, tab: 'plan' };
   }
-  const name = Object.keys(HASH).find((k) => HASH[k] === h);
+  const hh = HASH_ALIASES[h] ?? h;
+  const name = Object.keys(HASH).find((k) => HASH[k] === hh);
   if (name && (SECTIONS as readonly string[]).includes(name)) return { name } as Route;
   return { name: 'today' };
 }
@@ -60,19 +78,52 @@ export function NavProvider({ children, motherIds }: { children: ReactNode; moth
     }
     return routeFromHash(motherIds);
   });
+  const lastDepth = useRef(0);
+
+  // Mother ids change as records load; the listeners read the latest list.
+  const idsRef = useRef(motherIds);
+  idsRef.current = motherIds;
 
   useEffect(() => {
+    // A typed or pasted URL (#insights, #mother-...) makes a new history entry with no state.
+    // Chrome fires popstate and hashchange for it, some browsers and frames only hashchange.
+    // Both resolve the route from the hash and stamp the entry so Back works from it.
+    const fromHash = () => {
+      const r = routeFromHash(idsRef.current);
+      try {
+        const prev = window.history.state as { route?: Route; depth?: number } | null;
+        if (!prev?.route) window.history.replaceState({ route: r, depth: lastDepth.current + 1 }, '', hashFor(r));
+      } catch {
+        /* ignore */
+      }
+      setRoute((cur) => (hashFor(cur) === hashFor(r) && cur.name === r.name ? cur : r));
+    };
     const onPop = (e: PopStateEvent) => {
-      const st = e.state as { route?: Route } | null;
-      setRoute(st?.route ?? routeFromHash(motherIds));
+      const st = e.state as { route?: Route; depth?: number } | null;
+      if (st?.route) {
+        lastDepth.current = st.depth ?? 0;
+        setRoute(st.route);
+      } else fromHash();
+    };
+    const onHash = () => {
+      const st = window.history.state as { route?: Route; depth?: number } | null;
+      if (st?.route) {
+        lastDepth.current = st.depth ?? 0;
+        return; // already handled by popstate or by go()
+      }
+      fromHash();
     };
     window.addEventListener('popstate', onPop);
+    window.addEventListener('hashchange', onHash);
     try {
       window.history.replaceState({ route, depth: 0 }, '', hashFor(route));
     } catch {
       /* sandboxed frames may refuse; navigation still works in memory */
     }
-    return () => window.removeEventListener('popstate', onPop);
+    return () => {
+      window.removeEventListener('popstate', onPop);
+      window.removeEventListener('hashchange', onHash);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -80,6 +131,7 @@ export function NavProvider({ children, motherIds }: { children: ReactNode; moth
     setRoute(r);
     try {
       const depth = ((window.history.state as { depth?: number } | null)?.depth ?? 0) + (opts?.replace ? 0 : 1);
+      lastDepth.current = depth;
       if (opts?.replace) window.history.replaceState({ route: r, depth }, '', hashFor(r));
       else window.history.pushState({ route: r, depth }, '', hashFor(r));
     } catch {

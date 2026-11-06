@@ -21,6 +21,8 @@ export const ar: LanguagePack = {
     'nav.today': 'اليوم',
     'nav.mothers': 'الأمهات',
     'nav.dashboard': 'لوحة المتابعة',
+    // Insights is the renamed Programme dashboard: same word as before, still a draft.
+    'nav.insights': 'لوحة المتابعة',
     'nav.review': 'المراجعة',
     'nav.library': 'المكتبة',
     'nav.messages': 'الرسائل',

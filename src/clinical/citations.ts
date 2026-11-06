@@ -140,6 +140,12 @@ const list: Citation[] = [
   { id: 'support-ebf-2026', label: 'Nigerian Med J 2026: social support and exclusive breastfeeding review', url: 'https://pubmed.ncbi.nlm.nih.gov/42756483/' },
   { id: 'babywearing-2026', label: 'Lovell-Kennedy et al., BMJ Paediatr Open 2026: babywearing systematic review', url: 'https://pubmed.ncbi.nlm.nih.gov/42235974/' },
   { id: 'tba-2026', label: 'Yalley & Sanusi Gumbi, Front Glob Womens Health 2026: why women choose TBAs (Kano, Oyo)', url: 'https://pubmed.ncbi.nlm.nih.gov/42232019/' },
+  // ---- Several children, spacing, side effects, adverse events (added Nov 2026) ----
+  { id: 'conde-agudelo-2006', label: 'Conde-Agudelo et al., JAMA 2006: birth spacing and adverse perinatal outcomes, meta-analysis (intervals under 18 months raise preterm birth, low birth weight and small-for-age risk)', url: 'https://pubmed.ncbi.nlm.nih.gov/16622143/' },
+  { id: 'lopez-fernandez-2017', label: 'López-Fernández et al., Women Birth 2017: breastfeeding during pregnancy, systematic review (no effect on how pregnancies end or birth weight)', url: 'https://pubmed.ncbi.nlm.nih.gov/28642112/' },
+  { id: 'who-thinking-healthy-who', label: 'WHO 2015: Thinking Healthy, a manual for psychosocial management of perinatal depression (free download)', url: 'https://www.who.int/publications/i/item/WHO-MSD-MER-15.1' },
+  { id: 'ng-nafdac-pv', label: 'NAFDAC Pharmacovigilance Directorate: reporting adverse drug reactions and AEFIs (e-reporting, VigiFlow form, 0700-1-623322)', url: 'https://nafdac.gov.ng/?p=13970' },
+  { id: 'who-aefi-manual', label: 'WHO Global manual on surveillance of adverse events following immunization (2016 update)', url: 'https://www.who.int/publications/i/item/9789241507769' },
   { id: 'who-tm-strategy-2025', label: 'WHO Global Traditional Medicine Strategy 2025–2034', url: 'https://who.int/publications/i/item/9789240113176' },
 ];
 

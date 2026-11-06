@@ -1,8 +1,11 @@
-import type { CountryCode, IllustrationKey, LanguageCode } from '../types';
+import type { CountryCode, ExtraLanguageCode, IllustrationKey, LanguageCode } from '../types';
 import type { UiKey } from './uiKeys';
 
-/** Every language Gaskin can carry a pack for. French is extra to the core LanguageCode set (francophone neighbours). */
-export type PackCode = LanguageCode | 'fr';
+/**
+ * Every language Gaskin can carry a pack for. French and the ExtraLanguageCode set (Portuguese and
+ * Bantu languages) are extra to the core LanguageCode set.
+ */
+export type PackCode = LanguageCode | 'fr' | ExtraLanguageCode;
 
 /**
  * Pack status.

@@ -9,14 +9,18 @@ import { applySetupPlan, recommendSetup, resetSetup, useSetup, type SavedSetup, 
 import { isPackCode, t as packT, type PackCode } from '../i18n';
 import { registerTranslator, WorkerLanguage, dirFor } from './i18n';
 import '../setup/connectAssistant';
+import type { Mother, Worker } from '../types';
+import { seedDemoProfiles } from './accounts/auth';
 
 export interface Persona {
   id: 'lagos' | 'kano' | 'crossriver';
   title: string;
   blurb: string;
+  /** Short facts for the persona card */
+  facts: string[];
   /** Demo worker to act as */
   workerId: string;
-  answers: SetupAnswers;
+  answers: SetupAnswers & { audience?: string; countryCode?: string };
 }
 
 export const PERSONAS: Persona[] = [
@@ -24,8 +28,11 @@ export const PERSONAS: Persona[] = [
     id: 'lagos',
     title: 'Lagos midwife on a smartphone',
     blurb: 'Android phone with 4G, mothers speak Yoruba, Igbo, English and Pidgin. AI by copy and paste, or Claude when opened in Claude.',
+    facts: ['Smartphone, 4G', 'Yorùbá, Igbo, English', 'AI on'],
     workerId: 'w-ng-bisola',
     answers: {
+      audience: 'health_worker',
+      countryCode: 'NG',
       workerLanguage: 'en',
       role: 'midwife',
       country: 'NG',
@@ -47,8 +54,11 @@ export const PERSONAS: Persona[] = [
     id: 'kano',
     title: 'Kano CHEW with a shared basic phone',
     blurb: 'No internet, power some days, Hausa screens. No AI: the rules and templates do everything.',
+    facts: ['Shared basic phone', 'Hausa screens', 'No AI'],
     workerId: 'w-ng-zainab',
     answers: {
+      audience: 'health_worker',
+      countryCode: 'NG',
       workerLanguage: 'ha',
       role: 'chew',
       country: 'NG',
@@ -68,8 +78,11 @@ export const PERSONAS: Persona[] = [
     id: 'crossriver',
     title: 'Cross River CHEW with an old Windows laptop',
     blurb: 'Patchy 3G, Gaskin runs from a USB stick, mothers speak English and Pidgin. No AI unless opened in Claude.',
+    facts: ['Old laptop, USB stick', 'English, Pidgin', 'Patchy 3G'],
     workerId: 'w-ng-kemi',
     answers: {
+      audience: 'health_worker',
+      countryCode: 'NG',
       workerLanguage: 'en',
       role: 'chew',
       country: 'NG',
@@ -97,6 +110,21 @@ export async function applyPersona(p: Persona, inClaude: boolean): Promise<Saved
   const quick = plan.storage.mode === 'folder' ? { ...plan, storage: { ...plan.storage, mode: 'browser' as const, label: 'This browser (choose a USB folder later in Settings)' } } : plan;
   const r = await applySetupPlan(quick, p.answers, { packDurationMs: 250 });
   return r.saved;
+}
+
+/**
+ * Start as a persona: apply her setup, add demo profiles (PIN 1234) for her and her colleagues,
+ * sign her in and make her the acting worker.
+ */
+export async function startPersona(p: Persona, inClaude: boolean, data: { workers: Worker[]; mothers: Mother[] }, setWorker: (id: string) => void): Promise<void> {
+  await seedDemoProfiles(data.workers, data.mothers, p.workerId).catch(() => undefined);
+  setWorker(p.workerId);
+  try {
+    await applyPersona(p, inClaude);
+  } catch {
+    /* applySetupPlan never throws */
+  }
+  setWorker(p.workerId);
 }
 
 /** The worker's interface language from the saved setup ('en' before setup). */

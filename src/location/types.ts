@@ -49,6 +49,7 @@ export type MalariaRisk = 'high' | 'moderate' | 'seasonal' | 'low';
 export interface LocationProfile {
   /** Stable id, e.g. 'NG-benue' */
   id: string;
+  /** ISO 3166-1 alpha-2. A launch country (NG, KE, GH) for curated and country-default profiles; any country for 'generic'. */
   country: CountryCode;
   /** State, county or region name as used by the engine and synthetic data */
   region: string;
@@ -88,8 +89,12 @@ export interface LocationProfile {
   sources: Citation[];
   /** ISO date the profile was last checked */
   reviewedAt: string;
-  /** 'curated' = hand-built from the cited sources; 'generated' = built at setup from open datasets */
-  origin: 'curated' | 'generated' | 'country_default';
+  /**
+   * 'curated' = hand-built from the cited sources; 'generated' = built at setup from open datasets;
+   * 'country_default' = national lists for a launch country; 'generic' = any other country: WHO defaults,
+   * no local foods, practices or facilities.
+   */
+  origin: 'curated' | 'generated' | 'country_default' | 'generic';
 }
 
 /** The exact shape the engine accepts as PlanContext.location (src/engine/items.ts) */

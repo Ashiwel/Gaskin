@@ -224,6 +224,21 @@ export function useBackendBridge(state: AppState, rawDispatch: (a: Action) => vo
     }
   }, [state]);
 
+  // Saves are coalesced for 400 ms. Write them at once when the page is hidden, closed or
+  // reloaded, so the last change before a reload (or a stick pulled out after) is not lost.
+  useEffect(() => {
+    const now = () => void backend?.flush().catch(() => undefined);
+    const onVis = () => document.visibilityState === 'hidden' && now();
+    window.addEventListener('pagehide', now);
+    window.addEventListener('beforeunload', now);
+    document.addEventListener('visibilitychange', onVis);
+    return () => {
+      window.removeEventListener('pagehide', now);
+      window.removeEventListener('beforeunload', now);
+      document.removeEventListener('visibilitychange', onVis);
+    };
+  }, []);
+
   // Pick, load, subscribe (once)
   useEffect(() => {
     let off: (() => void) | undefined;

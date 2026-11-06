@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { chooseMode, createStore, memoryKV, openKV, localStorageKV, type StorageCapabilities } from '.';
-import { pwaSupport, registerPWA } from './pwa';
+import { chooseMode, createStore, memoryKV, openKV, localStorageKV, deriveKey, encryptJSON, decryptJSON, decryptWithPassphrase, isEncrypted, passphraseProblem, lockEncryption, validateImportedState, MAX_IMPORT_BYTES, type StorageCapabilities } from '.';
+import { pwaSupport, registerPWA, selfHostedCSP } from './pwa';
 
 const CAPS: StorageCapabilities = { indexedDB: true, localStorage: true, folderAccess: false, fromFile: false, inIframe: false, ios: false, mobile: false, serviceWorker: true, persist: false };
 
@@ -293,5 +293,120 @@ describe('PWA registration guard', () => {
   it('does nothing outside a browser (and so from file:// or a sandbox)', async () => {
     expect(pwaSupport().ok).toBe(false);
     expect(await registerPWA()).toBe(false);
+  });
+});
+
+// ---------- Security (docs/security-review.md) ----------
+
+describe('passphrase encryption at rest (SEC-08)', () => {
+  // Fewer PBKDF2 rounds keep the suite fast; production uses DEFAULT_ITERATIONS
+  afterEach(() => lockEncryption());
+
+  it('round-trips with AES-GCM and refuses a wrong passphrase or a tampered file', async () => {
+    const k = await deriveKey('correct horse battery', undefined, 1000);
+    const env = await encryptJSON({ name: 'Adaeze Okafor', bp: '150/100' }, k);
+    expect(isEncrypted(env)).toBe(true);
+    expect(JSON.stringify(env)).not.toMatch(/Adaeze|150/);
+    expect(env.kdf).toMatchObject({ name: 'PBKDF2', hash: 'SHA-256', iterations: 1000 });
+    expect((await decryptWithPassphrase(env, 'correct horse battery')).data).toEqual({ name: 'Adaeze Okafor', bp: '150/100' });
+    await expect(decryptWithPassphrase(env, 'wrong horse battery')).rejects.toMatchObject({ code: 'wrong_passphrase' });
+    const tampered = { ...env, data: env.data.slice(0, -4) + (env.data.endsWith('AAAA') ? 'BBBB' : 'AAAA') };
+    await expect(decryptJSON(tampered, k)).rejects.toMatchObject({ code: 'wrong_passphrase' });
+    // Two encryptions of the same data never look alike (fresh IV)
+    expect((await encryptJSON({ a: 1 }, k)).data).not.toBe((await encryptJSON({ a: 1 }, k)).data);
+  });
+
+  it('refuses weak passphrases in plain English', () => {
+    expect(passphraseProblem('short')).toMatch(/at least/);
+    expect(passphraseProblem('aaaaaaaaaaaa')).toMatch(/too easy/);
+    expect(passphraseProblem('mango rain market goat')).toBeNull();
+  });
+
+  it('folder, backups, browser copy and exported file hold only ciphertext; a new session needs the passphrase', async () => {
+    const dir = new FakeDir('GASKIN');
+    const kv = memoryKV();
+    const files: string[] = [];
+    const deps = { kv, caps: { ...CAPS, folderAccess: true }, now: clock().now, download: (_n: string, t: string) => (files.push(t), true), persist: async () => false, showDirectoryPicker: async () => dir };
+    const store = await createStore<{ who: string }>({ mode: 'folder', saveDebounceMs: 0, deps });
+    await store.chooseFolder();
+    await store.save({ who: 'Adaeze Okafor' });
+    expect(dir.files.get('gaskin-data.json')).toContain('Adaeze');
+
+    await store.enableEncryption('mango rain market goat');
+    expect(await store.isEncrypted()).toBe(true);
+    await store.save({ who: 'Adaeze Okafor, BP 150/100' });
+    const onStick = dir.files.get('gaskin-data.json')!;
+    expect(onStick).not.toMatch(/Adaeze|150/);
+    expect(isEncrypted(JSON.parse(onStick))).toBe(true);
+    expect(JSON.stringify(await kv.get('data'))).not.toMatch(/Adaeze/);
+    await store.exportFile();
+    expect(files.at(-1)).not.toMatch(/Adaeze/);
+    expect(store.status()).toMatchObject({ encrypted: true, locked: false });
+
+    // Lock: saves are refused rather than written in plain text
+    store.lock();
+    const refused = await store.save({ who: 'Adaeze again' });
+    expect(refused.state).toBe('needs_passphrase');
+    expect(dir.files.get('gaskin-data.json')).toBe(onStick);
+
+    // A new session (same browser) opens locked, then unlocks with the passphrase only
+    const again = await createStore<{ who: string }>({ mode: 'folder', saveDebounceMs: 0, deps });
+    expect(await again.load()).toBeNull();
+    expect(again.status().state).toBe('needs_passphrase');
+    await expect(again.unlock('not the passphrase')).rejects.toMatchObject({ code: 'wrong_passphrase' });
+    expect(await again.unlock('mango rain market goat')).toEqual({ who: 'Adaeze Okafor, BP 150/100' });
+
+    // Turning it off writes plain text again
+    await again.disableEncryption();
+    await again.save({ who: 'plain' });
+    expect(JSON.parse(dir.files.get('gaskin-data.json')!).data).toEqual({ who: 'plain' });
+  }, 30_000);
+});
+
+describe('importing a malformed or malicious backup (SEC-09)', () => {
+  const good = () => ({
+    mothers: [{ id: 'm1', name: 'A B', age: 24, country: 'NG', events: [{ id: 'e1', kind: 'visit', at: '2026-10-01T09:00:00Z' }], children: [], phone: { access: 'none', hasWhatsApp: false }, consent: { dataProcessing: true, messaging: false } }],
+  });
+
+  it('accepts a sound file and strips prototype keys and unsafe links', () => {
+    const raw = JSON.parse(JSON.stringify(good()).replace('"id":"m1"', '"id":"m1","__proto__":{"polluted":true},"sources":[{"label":"x","url":"javascript:alert(1)"},{"label":"y","url":"https://who.int"}]'));
+    const r = validateImportedState(raw);
+    expect(r.ok).toBe(true);
+    expect(({} as Record<string, unknown>).polluted).toBeUndefined();
+    const m = (r.state as unknown as { mothers: Array<{ sources: Array<{ url?: string }> }> }).mothers[0];
+    expect(m.sources[0].url).toBeUndefined();
+    expect(m.sources[1].url).toBe('https://who.int');
+    expect(r.counts).toEqual({ mothers: 1, events: 1 });
+  });
+
+  it.each([
+    ['not an object', 'hello'],
+    ['no mothers', { workers: [] }],
+    ['mother without timeline', { mothers: [{ id: 'm', name: 'A', age: 20, country: 'NG', phone: {}, consent: {} }] }],
+    ['event with a bad date', { mothers: [{ ...good().mothers[0], events: [{ id: 'e', kind: 'visit', at: 'yesterday' }] }] }],
+    ['duplicate ids', { mothers: [good().mothers[0], good().mothers[0]] }],
+    ['a 10,000-character name', { mothers: [{ ...good().mothers[0], name: 'x'.repeat(10_000) }] }],
+    ['unknown country', { mothers: [{ ...good().mothers[0], country: 'ZZ' }] }],
+  ])('refuses %s with a plain reason', (_label, raw) => {
+    const r = validateImportedState(raw);
+    expect(r.ok).toBe(false);
+    expect(r.problems[0]).toMatch(/[A-Z].+\./);
+  });
+
+  it('store.importFile refuses a file over the size limit', async () => {
+    const store = await createStore<{ n: number }>({ mode: 'browser', saveDebounceMs: 0, deps: { kv: memoryKV(), caps: CAPS, download: () => true, persist: async () => false } });
+    const big = { size: MAX_IMPORT_BYTES + 1, text: async () => 'x'.repeat(MAX_IMPORT_BYTES + 1) } as unknown as Blob;
+    await expect(store.importFile(big)).rejects.toThrow(/too large/);
+  });
+});
+
+describe('self-hosted CSP (SEC-19)', () => {
+  it('shuts objects, base and foreign scripts, and lists only the connections asked for', () => {
+    const csp = selfHostedCSP({ serverOrigin: 'https://gaskin.example.ng', aiOrigins: ['https://ai.example.ng'], allowOverpass: false });
+    expect(csp).toMatch(/object-src 'none'/);
+    expect(csp).toMatch(/base-uri 'none'/);
+    expect(csp).toMatch(/connect-src 'self' https:\/\/gaskin\.example\.ng https:\/\/ai\.example\.ng(;|$)/);
+    expect(csp).not.toMatch(/unsafe-eval|jsdelivr/);
+    expect(selfHostedCSP({ allowWebLLM: true })).toMatch(/jsdelivr/);
   });
 });

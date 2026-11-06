@@ -4,11 +4,15 @@ Gaskin's own code is released under the GNU Affero General Public License, versi
 
 | Component | Version | Licence | How Gaskin uses it |
 |---|---|---|---|
-| React and React DOM | 19 | MIT | User interface (bundled into the single file) |
-| lucide-react | 1.58.0 (pinned) | ISC, with some icons under MIT (Feather) | Interface icons. Gaskin's pictograms are its own (CC-BY-4.0). |
+| React and React DOM | 19.3.1 (pinned) | MIT | User interface (bundled into the single file) |
 | Tailwind CSS and @tailwindcss/vite | 4.3.3 (pinned) | MIT | Build time only: generates the stylesheet. No Tailwind code runs in the app. |
-| Animata (codse/animata) | copied 5 Nov 2026 | MIT | Five components were copied and adapted, not installed: animated border trail, flip card, bar chart, bento grid, sibling focus navigation. Each file in `src/ui/animata/` carries the notice and lists what was changed. |
-| Newsreader and Hanken Grotesk | Google Fonts | SIL Open Font License 1.1 | Loaded from Google Fonts when online; the app falls back to system serif and sans-serif fonts offline. |
+| Animata (codse/animata) | copied 5 Nov 2026 | MIT | Two components were copied and adapted, not installed: the animated border trail and the flip card. Each file in `src/ui/animata/` carries the notice and lists what was changed. The bar chart, bento grid and sibling focus navigation were removed in the redesign (6 Nov). |
+| Untitled UI React (untitleduico/react) | copied 5 Nov 2026, commit 1d410cb | MIT | Components and theme copied into `src/components/` and `src/styles/theme.css`, not installed, then adapted (brand colour, Stone neutral, offline-only assets, relative imports). `src/components/LICENSE-untitledui.txt` holds the licence. |
+| @untitledui/icons | 0.0.23 (pinned) | MIT | Interface icons. Gaskin's pictograms are its own (CC-BY-4.0). |
+| react-aria-components, react-aria, react-stately, @internationalized/date | 1.22.1, 3.53.1, 3.51.0, 3.12.4 (pinned) | Apache-2.0 | Accessible behaviour for the Untitled UI components. |
+| tailwind-merge | 3.7.0 (pinned) | MIT | Merges Tailwind class names in components. |
+| tailwindcss-react-aria-components, tailwindcss-animate, @react-aria/optimize-locales-plugin | 2.2.0, 1.0.7, 2.1.0 (pinned) | Apache-2.0, MIT, Apache-2.0 | Build time only. |
+| Inter | 4.1 (rsms/inter release) | SIL Open Font License 1.1 | Embedded as a subset woff2 data URI by `scripts/font/build-inter.py`, so it works offline. |
 | Model Context Protocol SDK, zod | see `mcp-server/package.json` | MIT | The Gaskin connector for AI assistants (`mcp-server/`). |
 | Hono and the server dependencies | see `server/package.json` | MIT and others as listed there | The optional production server (`server/`). |
 
@@ -39,54 +43,6 @@ NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE
 LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
 OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
 WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.```
-
-## lucide-react
-
-```
-ISC License
-
-Copyright (c) 2026 Lucide Icons and Contributors
-
-Permission to use, copy, modify, and/or distribute this software for any
-purpose with or without fee is hereby granted, provided that the above
-copyright notice and this permission notice appear in all copies.
-
-THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
-WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
-MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
-ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
-WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
-ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
-OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
-
----
-
-The following Lucide icons are derived from the Feather project:
-
-airplay, alert-circle, alert-octagon, alert-triangle, aperture, arrow-down-circle, arrow-down-left, arrow-down-right, arrow-down, arrow-left-circle, arrow-left, arrow-right-circle, arrow-right, arrow-up-circle, arrow-up-left, arrow-up-right, arrow-up, at-sign, calendar, cast, check, chevron-down, chevron-left, chevron-right, chevron-up, chevrons-down, chevrons-left, chevrons-right, chevrons-up, circle, clipboard, clock, code, columns, command, compass, corner-down-left, corner-down-right, corner-left-down, corner-left-up, corner-right-down, corner-right-up, corner-up-left, corner-up-right, crosshair, database, divide-circle, divide-square, dollar-sign, download, external-link, feather, frown, hash, headphones, help-circle, info, italic, key, layout, life-buoy, link-2, link, loader, lock, log-in, log-out, maximize, meh, minimize, minimize-2, minus-circle, minus-square, minus, monitor, moon, more-horizontal, more-vertical, move, music, navigation-2, navigation, octagon, pause-circle, percent, plus-circle, plus-square, plus, power, radio, rss, search, server, share, shopping-bag, sidebar, smartphone, smile, square, table-2, tablet, target, terminal, trash-2, trash, triangle, tv, type, upload, x-circle, x-octagon, x-square, x, zoom-in, zoom-out
-
-The MIT License (MIT) (for the icons listed above)
-
-Copyright (c) 2013-present Cole Bemis
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-```
 
 ## Tailwind CSS
 
@@ -138,4 +94,120 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+```
+
+## Geography and language data (`src/geo/data`, 6 Nov, geography agent)
+
+Bundled into the single file; generated by `scripts/geo/build.mjs` from the pinned versions below. Full provenance, counts and corrections: `src/geo/SOURCES.md`.
+
+| Component | Version | Licence | How Gaskin uses it |
+|---|---|---|---|
+| iso-3166 (Titus Wormer) | 4.4.0 | MIT | ISO 3166-1 country codes and ISO 3166-2 first-level subdivisions |
+| countries-list (Annexare Studio) | 3.4.1 | MIT | Country names (English and native), aliases, calling codes, currencies |
+| Unicode CLDR (cldr-core, cldr-localenames-full) | 48.2.0 | Unicode License v3 | Languages per country with population share and official status; language names |
+| geoBoundaries (William & Mary geoLab), gbOpen NGA ADM1/ADM2 | commit 9469f09 | CC BY 4.0; source: GRID3 Nigeria LGA boundaries | 774 Nigerian LGAs by state, with approximate centres |
+| geoBoundaries gbOpen KEN ADM1/ADM2 | commit 9469f09 | ADM1 public domain (RCMRD); ADM2 CC BY 3.0 IGO (IEBC, OCHA ROSEA) | 47 counties, 290 sub-counties |
+| geoBoundaries gbOpen ZAF ADM1/ADM3 | commit 9469f09 | CC BY 3.0 IGO (Municipal Demarcation Board, OCHA ROSEA) | 9 provinces, 213 municipalities |
+| ghana-geo-data (Eric Bidopa) | commit c4570a4 | CC BY-SA 4.0 (data, from Wikipedia "Districts of Ghana") | 16 regions, 261 districts, kept as a separate data file, `src/geo/data/areas/GH.json`, with its licence beside it in `GH.LICENSE.md`. Redistributed under CC BY-SA 4.0 |
+
+Attribution: "geoBoundaries: Runfola, D. et al. (2020) geoBoundaries: A global database of political administrative boundaries. PLoS ONE 15(4): e0231866", with the underlying sources GRID3 (Nigeria), RCMRD and IEBC via OCHA ROSEA (Kenya), and the Municipal Demarcation Board via OCHA ROSEA (South Africa). Ghana districts: Eric Bidopa, ghana-geo-data, from Wikipedia contributors, "Districts of Ghana", CC BY-SA 4.0 (https://creativecommons.org/licenses/by-sa/4.0/).
+
+Share-alike: the Ghana district list stays under CC BY-SA 4.0 wherever it goes. Anyone who changes or redistributes `src/geo/data/areas/GH.json` must keep the attribution above and release their version of that list under CC BY-SA 4.0. The term covers that list only, not Gaskin's code (AGPL-3.0-only) or its other content (CC BY 4.0). In the single-file build the list is inlined as data; this notice and `GH.LICENSE.md` travel with the source.
+
+### iso-3166
+
+```
+(The MIT License)
+
+Copyright (c) 2020 Titus Wormer <tituswormer@gmail.com>
+
+Permission is hereby granted, free of charge, to any person obtaining
+a copy of this software and associated documentation files (the
+'Software'), to deal in the Software without restriction, including
+without limitation the rights to use, copy, modify, merge, publish,
+distribute, sublicense, and/or sell copies of the Software, and to
+permit persons to whom the Software is furnished to do so, subject to
+the following conditions:
+
+The above copyright notice and this permission notice shall be
+included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED 'AS IS', WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+```
+
+### countries-list
+
+```
+The MIT License (MIT)
+
+Copyright (c) 2014 Annexare Studio
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.```
+
+### Unicode CLDR
+
+```
+UNICODE LICENSE V3
+
+COPYRIGHT AND PERMISSION NOTICE
+
+Copyright © 2004-2026 Unicode, Inc.
+
+NOTICE TO USER: Carefully read the following legal agreement. BY
+DOWNLOADING, INSTALLING, COPYING OR OTHERWISE USING DATA FILES, AND/OR
+SOFTWARE, YOU UNEQUIVOCALLY ACCEPT, AND AGREE TO BE BOUND BY, ALL OF THE
+TERMS AND CONDITIONS OF THIS AGREEMENT. IF YOU DO NOT AGREE, DO NOT
+DOWNLOAD, INSTALL, COPY, DISTRIBUTE OR USE THE DATA FILES OR SOFTWARE.
+
+Permission is hereby granted, free of charge, to any person obtaining a
+copy of data files and any associated documentation (the "Data Files") or
+software and any associated documentation (the "Software") to deal in the
+Data Files or Software without restriction, including without limitation
+the rights to use, copy, modify, merge, publish, distribute, and/or sell
+copies of the Data Files or Software, and to permit persons to whom the
+Data Files or Software are furnished to do so, provided that either (a)
+this copyright and permission notice appear with all copies of the Data
+Files or Software, or (b) this copyright and permission notice appear in
+associated Documentation.
+
+THE DATA FILES AND SOFTWARE ARE PROVIDED "AS IS", WITHOUT WARRANTY OF ANY
+KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT OF
+THIRD PARTY RIGHTS.
+
+IN NO EVENT SHALL THE COPYRIGHT HOLDER OR HOLDERS INCLUDED IN THIS NOTICE
+BE LIABLE FOR ANY CLAIM, OR ANY SPECIAL INDIRECT OR CONSEQUENTIAL DAMAGES,
+OR ANY DAMAGES WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS,
+WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION,
+ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THE DATA
+FILES OR SOFTWARE.
+
+Except as contained in this notice, the name of a copyright holder shall
+not be used in advertising or otherwise to promote the sale, use or other
+dealings in these Data Files or Software without prior written
+authorization of the copyright holder.
+
+SPDX-License-Identifier: Unicode-3.0
 ```

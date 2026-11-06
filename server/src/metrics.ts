@@ -59,8 +59,33 @@ function count(v: number, min: number): PublicCount {
   return v > 0 && v < min ? { value: null, suppressed: true } : { value: v };
 }
 
+/**
+ * A rate with its denominator published reveals its numerator (percent x denominator), so it is
+ * withheld when the numerator, or the number who did not, is between 1 and min - 1. "3 of 40 women"
+ * is a small count whether it is printed as 3 or as 8%.
+ */
 function rate(num: number, den: number, min: number): PublicRate {
-  return { percent: den >= min ? Math.round((num / den) * 100) : null, denominator: count(den, min) };
+  const small = (n: number) => n > 0 && n < min;
+  const ok = den >= min && !small(num) && !small(den - num);
+  return { percent: ok ? Math.round((num / den) * 100) : null, denominator: count(den, min) };
+}
+
+/**
+ * Secondary suppression for parts that add up to a published total: with exactly one part
+ * withheld, the total minus the others gives it away, so the next smallest part is withheld
+ * too (or the total, when no other part can be).
+ */
+function suppressParts<K extends string>(total: PublicCount, parts: Record<K, PublicCount>): void {
+  if (total.suppressed) return;
+  const keys = Object.keys(parts) as K[];
+  const hidden = keys.filter((k) => parts[k].suppressed);
+  if (hidden.length !== 1) return;
+  const visible = keys.filter((k) => !parts[k].suppressed && (parts[k].value ?? 0) > 0).sort((a, b) => (parts[a].value ?? 0) - (parts[b].value ?? 0));
+  if (visible.length) parts[visible[0]] = { value: null, suppressed: true };
+  else {
+    total.value = null;
+    total.suppressed = true;
+  }
 }
 
 function lastMonths(n: number, now = new Date()): string[] {
@@ -153,17 +178,21 @@ export async function computePublicMetrics(db: DB, store: Store, opts: { suppres
       if (r.status === 'delivered' || r.status === 'read') deliveredMsgs += n;
     }
     const usd = Number(costRows.find((r) => r.country === cc)?.usd ?? 0);
+    const enrolled = count(ms.length, min);
+    const stages = {
+      pregnancy: count(stage.pregnancy, min),
+      postpartum: count(stage.postpartum, min),
+      infant: count(stage.infant, min),
+      preconception: count(stage.preconception, min),
+    };
+    // Stages add up to the enrolled total (records the engine cannot read are the only gap)
+    if (stage.pregnancy + stage.postpartum + stage.infant + stage.preconception === ms.length) suppressParts(enrolled, stages);
     out.countries[cc] = {
-      mothersEnrolled: count(ms.length, min),
+      mothersEnrolled: enrolled,
       mothersActive90d: count(active, min),
       facilities: count(Number(facRows.find((r) => r.country === cc)?.n ?? 0), min),
       healthWorkers: count(Number(workerRows.find((r) => r.country === cc)?.n ?? 0), min),
-      stage: {
-        pregnancy: count(stage.pregnancy, min),
-        postpartum: count(stage.postpartum, min),
-        infant: count(stage.infant, min),
-        preconception: count(stage.preconception, min),
-      },
+      stage: stages,
       anc4PlusAmongDelivered: rate(anc4, delivered, min),
       facilityBirths: rate(facilityBirths, births, min),
       pncWithin48h: rate(pnc48, births, min),

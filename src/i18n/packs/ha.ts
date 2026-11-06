@@ -30,6 +30,8 @@ export const ha: LanguagePack = {
     'nav.today': 'Yau',
     'nav.mothers': 'Iyaye mata',
     'nav.dashboard': 'Taƙaitawa',
+    // Insights is the renamed Programme dashboard: same word as before, still a draft.
+    'nav.insights': 'Taƙaitawa',
     'nav.review': 'Dubawa',
     'nav.library': 'Ɗakin karatu',
     'nav.messages': 'Saƙonni',

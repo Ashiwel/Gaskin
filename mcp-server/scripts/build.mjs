@@ -17,7 +17,7 @@ const r = await build({
   keepNames: true,
   sourcemap: false,
   legalComments: 'none',
-  banner: { js: '#!/usr/bin/env node\n// Gaskin MCP server (bundled). Source: mcp-server/src. Licence: Apache-2.0.' },
+  banner: { js: '#!/usr/bin/env node\n// Gaskin MCP server (bundled). Source: mcp-server/src. Licence: AGPL-3.0-only (see LICENSE).' },
   define: { 'import.meta.env': '{}' },
   logLevel: 'warning',
   metafile: true,

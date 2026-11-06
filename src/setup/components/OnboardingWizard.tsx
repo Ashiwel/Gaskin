@@ -1,21 +1,73 @@
 /**
- * Guided onboarding: one plain question per screen with big picture answers, then
- * "Here is your setup" and a single button that applies everything.
+ * Guided onboarding: one calm question per screen with large options, a progress bar, back and
+ * skip, then "Here is your setup" as a set of visual cards and one button that applies it.
  *
- * Mount it full-screen. Styles are self-contained, prefixed `setup-`, and read the
- * app theme through var(--…) tokens with fallbacks.
+ * Order: who will use Gaskin, country, area, language (worked out from the place, so a worker in
+ * South Africa never sees Nigerian languages), then the device and work questions for health
+ * workers, or a short, kind branch for a mother using Gaskin for herself (not a doctor, consent,
+ * register at a clinic, the emergency number for her country).
+ *
+ * The root keeps the `setup-root` class for the walk-through; styling is Tailwind on theme tokens.
  */
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { LANGUAGE_NAMES } from '../../data';
-import { listRegions, nearestRegion, getLocationProfile } from '../../location';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import {
+  AlertTriangle,
+  ArrowRight,
+  Building02,
+  CheckCircle,
+  Database02,
+  Globe02,
+  Heart,
+  HeartHand,
+  Home03,
+  Lock01,
+  MarkerPin02,
+  MessageChatSquare,
+  PhoneCall01,
+  Printer,
+  RefreshCw01,
+  ShieldTick,
+  Stars02,
+  Translate01,
+  UsersRight,
+  Laptop02,
+  Phone01,
+  Monitor04,
+  Clock,
+} from '@untitledui/icons';
+import { nearestRegion } from '../../location';
+import { saveAISettings, type KeyPersistence } from '../../ai';
+import { getAppStore, passphraseProblem } from '../../storage';
 import { applySetupPlan, type ApplyOptions, type ApplyProgress, type ApplyStepId } from '../apply';
 import { connectAssistant, type AssistantConnection } from '../assistant';
 import { detectSetupEnvironment, requestPosition } from '../env';
-import { NOT_SURE, visibleQuestions, type Question, type QuestionOption } from '../questions';
+import { visibleQuestions, type Question, type QuestionOption } from '../questions';
 import { recommendSetup } from '../recommend';
 import { langTag, st, type SetupKey } from '../strings';
 import type { SetupAnswers, SetupEnvironment, SetupPlan, WorkerLanguage } from '../types';
-import { SetupIcon } from './icons';
+import { Choice, ChoiceList, ComingSoon, DraftBadge, PickerField, PrimaryButton, SearchSheet, SecondaryButton, StepFrame, TextField, type IconType, type PickItem } from '../../ui/onboarding/kit';
+import { SETUP_ICONS } from '../../ui/onboarding/icons';
+import {
+  CONSENT_VERSION,
+  allLanguages,
+  consentLines,
+  countryName,
+  dialable,
+  emergencyFor,
+  flagOf,
+  isLaunch,
+  languageName,
+  languagesFor,
+  listCountries,
+  useDistricts,
+  listRegionsFor,
+  personalDisclaimers,
+  regionWords,
+  saveConsent,
+  type PersonalConsent,
+  type PlaceLanguage,
+} from '../../ui/onboarding/geo';
+import { cx } from '../../utils/cx';
 
 export interface OnboardingWizardProps {
   /** Called after the plan is applied; the app should land on the caseload */
@@ -24,632 +76,893 @@ export interface OnboardingWizardProps {
   initialAnswers?: SetupAnswers;
   /** Override detected device facts (demo controls, tests) */
   env?: SetupEnvironment;
-  /** Shows a small "Skip setup and look around" link on the first screen */
+  /** Shows a quiet "Look around first" link on the first screen */
   onSkipAll?: () => void;
   /** Passed to applySetupPlan (tests, pack download speed) */
   applyOptions?: Omit<ApplyOptions, 'apiKey' | 'onProgress'>;
+  /** Shown under the first question (the reviewer presets) */
+  firstStepExtra?: ReactNode;
+}
+
+export type Audience = 'health_worker' | 'supervisor' | 'personal';
+
+/** Answers plus the onboarding's own fields (kept with the saved setup). */
+export type WizardAnswers = SetupAnswers & {
+  audience?: Audience;
+  /** ISO code for any country (SetupAnswers.country is 'other' outside the launch countries) */
+  countryCode?: string;
+  consent?: PersonalConsent;
+};
+
+type StepId = 'who' | 'country' | 'place' | 'language' | 'mothers' | 'not_doctor' | 'consent' | 'clinic' | `q:${string}`;
+
+const WORK_QUESTIONS = ['role', 'devices', 'computerOs', 'internet', 'dataBudget', 'electricity', 'printer', 'aiApps', 'aiPay', 'caseload', 'setupBy', 'techComfort'];
+
+function stepsFor(a: WizardAnswers): StepId[] {
+  const base: StepId[] = ['who', 'country', 'place', 'language'];
+  if (a.audience === 'personal') return [...base, 'not_doctor', 'consent', 'clinic'];
+  const visible = new Set(visibleQuestions(a).map((q) => q.id as string));
+  const work = WORK_QUESTIONS.filter((id) => visible.has(id) && !(id === 'role' && a.audience === 'supervisor')).map((id) => `q:${id}` as StepId);
+  return [...base, 'mothers', ...work];
 }
 
 type Phase = 'questions' | 'summary' | 'applying';
 
-export function OnboardingWizard({ onComplete, initialAnswers, env: envProp, onSkipAll, applyOptions }: OnboardingWizardProps) {
-  const [answers, setAnswers] = useState<SetupAnswers>(initialAnswers ?? {});
+export function OnboardingWizard({ onComplete, initialAnswers, env: envProp, onSkipAll, applyOptions, firstStepExtra }: OnboardingWizardProps) {
+  const [answers, setAnswers] = useState<WizardAnswers>(() => ({ ...(initialAnswers ?? {}) }) as WizardAnswers);
   const [index, setIndex] = useState(0);
   const [phase, setPhase] = useState<Phase>('questions');
   const env = useMemo(() => envProp ?? detectSetupEnvironment(), [envProp]);
   const lang: WorkerLanguage = answers.workerLanguage ?? 'en';
   const T = (k: SetupKey, p?: Record<string, string | number>, en?: string) => st(k, lang, p, en);
-
-  const questions = visibleQuestions(answers);
-  const q = questions[Math.min(index, questions.length - 1)];
-  const plan = useMemo(() => (phase === 'questions' ? null : recommendSetup(answers, env)), [phase, answers, env]);
-
-  const headingRef = useRef<HTMLHeadingElement>(null);
+  const steps = stepsFor(answers);
+  const step = steps[Math.min(index, steps.length - 1)];
+  const total = steps.length + 1;
+  const set = (patch: Partial<WizardAnswers>) => setAnswers((a) => ({ ...a, ...patch }));
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => void (timer.current && clearTimeout(timer.current)), []);
   useEffect(() => {
-    headingRef.current?.focus();
+    try {
+      window.scrollTo({ top: 0 });
+    } catch {
+      /* jsdom */
+    }
   }, [index, phase]);
 
   const next = () => {
-    const qs = visibleQuestions(answers);
-    if (index + 1 >= qs.length) setPhase('summary');
+    if (timer.current) clearTimeout(timer.current);
+    const s = stepsFor(answers);
+    if (index + 1 >= s.length) setPhase('summary');
     else setIndex(index + 1);
+  };
+  /** Single choice: show the tick, then move on. */
+  const pickThenNext = (patch: Partial<WizardAnswers>) => {
+    setAnswers((a) => {
+      const nextA = { ...a, ...patch };
+      if (timer.current) clearTimeout(timer.current);
+      timer.current = setTimeout(() => {
+        const s = stepsFor(nextA);
+        setIndex((i) => {
+          if (i + 1 >= s.length) {
+            setPhase('summary');
+            return i;
+          }
+          return i + 1;
+        });
+      }, 260);
+      return nextA;
+    });
   };
   const back = () => {
     if (phase === 'summary') {
       setPhase('questions');
-      setIndex(visibleQuestions(answers).length - 1);
+      setIndex(stepsFor(answers).length - 1);
     } else if (index > 0) setIndex(index - 1);
   };
-  const set = (patch: Partial<SetupAnswers>) => setAnswers((a) => ({ ...a, ...patch }));
+
+  const common = {
+    progress: phase === 'questions' ? (index + 1) / total : 1,
+    stepLabel: phase === 'questions' ? `${index + 1} of ${total}` : undefined,
+    onBack: index > 0 || phase !== 'questions' ? back : undefined,
+    backLabel: T('back'),
+  };
 
   return (
-    <div className="setup-root" lang={langTag(lang)}>
-      <style>{CSS}</style>
-      {phase === 'questions' && q ? (
-        <QuestionScreen
-          key={q.id}
-          q={q}
-          answers={answers}
-          set={set}
-          T={T}
-          lang={lang}
-          index={index}
-          total={questions.length}
-          onNext={next}
-          onBack={index > 0 ? back : undefined}
-          onSkipAll={index === 0 ? onSkipAll : undefined}
-          headingRef={headingRef}
-        />
-      ) : null}
-      {phase !== 'questions' && plan ? (
+    <div className="setup-root min-h-dvh bg-primary text-primary" lang={langTag(lang)} data-step={phase === 'questions' ? step : phase}>
+      {phase === 'questions' ? (
+        <StepScreen key={step} step={step} answers={answers} set={set} pickThenNext={pickThenNext} next={next} T={T} common={common} env={env} onSkipAll={onSkipAll} firstStepExtra={firstStepExtra} />
+      ) : answers.audience === 'personal' ? (
+        <PersonalReady answers={answers} common={common} applying={phase === 'applying'} onApply={async () => {
+          setPhase('applying');
+          const plan = personalPlan(answers, env);
+          await applySetupPlan(plan, answers, { ...applyOptions });
+          onComplete(plan, answers);
+        }} />
+      ) : (
         <Summary
-          plan={plan}
           answers={answers}
+          env={env}
           T={T}
-          lang={lang}
+          common={common}
           applying={phase === 'applying'}
-          headingRef={headingRef}
-          onBack={back}
-          onApply={async (apiKey, onProgress) => {
+          onApply={async (plan, extras, onProgress) => {
             setPhase('applying');
-            await applySetupPlan(plan, answers, { ...applyOptions, apiKey, onProgress });
+            const r = await applySetupPlan(plan, answers, { ...applyOptions, apiKey: extras.apiKey, onProgress });
+            if (extras.apiKey) saveAISettings(r.aiSettings, extras.keyPersistence);
+            if (extras.passphrase) {
+              try {
+                const store = await getAppStore();
+                await store.enableEncryption(extras.passphrase);
+              } catch {
+                /* the Privacy settings say how to turn it on later */
+              }
+            }
             onComplete(plan, answers);
           }}
         />
-      ) : null}
+      )}
     </div>
   );
 }
 
+/** A mother's own setup: her phone, her language, no AI unless she agreed to it. */
+function personalPlan(a: WizardAnswers, env: SetupEnvironment): SetupPlan {
+  const plan = recommendSetup({ ...a, role: 'other', devices: a.devices ?? ['android_phone'], mothersLanguages: a.workerLanguage && a.workerLanguage !== 'other' ? [a.workerLanguage as never] : ['en'] }, env);
+  const ai = a.consent?.aiAllowed ? plan.ai : { ...plan.ai, mode: 'none' as const, settings: { mode: 'none' as const }, label: 'No AI', reason: 'You chose not to use smart help. You can switch it on in Settings.' };
+  return { ...plan, ai, firstTenMinutes: ['Add your due date or your baby’s birthday.', 'Read your plan for this week.', 'Save the emergency number in your phone.'] };
+}
+
 // ---------------------------------------------------------------------------
-// One question
+// One step
 // ---------------------------------------------------------------------------
 
 type TFn = (k: SetupKey, p?: Record<string, string | number>, en?: string) => string;
-
-interface QProps {
-  q: Question;
-  answers: SetupAnswers;
-  set: (p: Partial<SetupAnswers>) => void;
-  T: TFn;
-  lang: WorkerLanguage;
-  index: number;
-  total: number;
-  onNext: () => void;
+interface Common {
+  progress: number;
+  stepLabel?: string;
   onBack?: () => void;
+  backLabel: string;
+}
+
+interface StepProps {
+  step: StepId;
+  answers: WizardAnswers;
+  set: (p: Partial<WizardAnswers>) => void;
+  pickThenNext: (p: Partial<WizardAnswers>) => void;
+  next: () => void;
+  T: TFn;
+  common: Common;
+  env: SetupEnvironment;
   onSkipAll?: () => void;
-  headingRef: React.RefObject<HTMLHeadingElement | null>;
+  firstStepExtra?: ReactNode;
 }
 
-function Dots({ index, total }: { index: number; total: number }) {
-  return (
-    <div className="setup-dots" aria-hidden="true">
-      {Array.from({ length: total }).map((_, i) => (
-        <span key={i} className={`setup-dot${i < index ? ' is-done' : i === index ? ' is-here' : ''}`} />
-      ))}
-    </div>
-  );
-}
-
-function OptionButton({ o, selected, onClick, multi, label }: { o: QuestionOption; selected: boolean; onClick: () => void; multi?: boolean; label: string }) {
-  return (
-    <button type="button" className={`setup-option${selected ? ' is-selected' : ''}`} aria-pressed={selected} role={multi ? 'checkbox' : 'radio'} aria-checked={selected} onClick={onClick}>
-      <span className="setup-option-icon">
-        <SetupIcon name={o.icon} />
-      </span>
-      <span className="setup-option-text">
-        <span className="setup-option-label">{label}</span>
-        {o.hint ? <span className="setup-option-hint">{o.hint}</span> : null}
-      </span>
-      {selected ? (
-        <span className="setup-option-tick" aria-hidden="true">
-          <svg viewBox="0 0 24 24" width="22" height="22">
-            <path d="M5 12.5l4.5 4.5L19 7.5" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
-          </svg>
-        </span>
-      ) : null}
-    </button>
-  );
-}
-
-function QuestionScreen({ q, answers, set, T, lang, index, total, onNext, onBack, onSkipAll, headingRef }: QProps) {
-  const opts = q.options(answers);
-  const key = q.id as keyof SetupAnswers;
-  const value = q.id === 'location' ? answers.region : (answers[key] as unknown);
-  const labelFor = (o: QuestionOption) => (o.value === 'not_sure' ? T('not_sure') : o.label);
-  const title = T(`q.${q.id}` as SetupKey, undefined, q.title);
-  const advanceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  useEffect(() => () => {
-    if (advanceTimer.current) clearTimeout(advanceTimer.current);
-  }, []);
-
-  // Single choice: select and move on after a short pause so she sees the tick.
-  const pickSingle = (v: string | number) => {
-    set({ [key]: v } as Partial<SetupAnswers>);
-    if (advanceTimer.current) clearTimeout(advanceTimer.current);
-    advanceTimer.current = setTimeout(onNext, 260);
-  };
-
-  let body: React.ReactNode = null;
-  let canContinue = true;
-
-  if (q.kind === 'single') {
-    body = (
-      <div className="setup-options" role="radiogroup" aria-label={title}>
-        {opts.map((o) => (
-          <OptionButton key={String(o.value)} o={o} label={q.id === 'workerLanguage' ? o.label : labelFor(o)} selected={value === o.value} onClick={() => pickSingle(o.value)} />
-        ))}
-      </div>
-    );
-    canContinue = value !== undefined;
-  } else if (q.kind === 'multi') {
-    const arr = (Array.isArray(value) ? value : []) as Array<string | number>;
-    const toggle = (o: QuestionOption) => {
-      let nextArr: Array<string | number>;
-      if (arr.includes(o.value)) nextArr = arr.filter((x) => x !== o.value);
-      else if (o.exclusive) nextArr = [o.value];
-      else nextArr = [...arr.filter((x) => !opts.find((p) => p.value === x)?.exclusive), o.value];
-      set({ [key]: nextArr } as Partial<SetupAnswers>);
-    };
-    body = (
-      <>
-        <p className="setup-help">{T('pick_all')}</p>
-        <div className="setup-options" role="group" aria-label={title}>
-          {opts.map((o) => (
-            <OptionButton key={String(o.value)} o={o} multi label={labelFor(o)} selected={arr.includes(o.value)} onClick={() => toggle(o)} />
-          ))}
-        </div>
-      </>
-    );
-    canContinue = arr.length > 0;
-  } else if (q.kind === 'choice_or_text') {
-    const other = value === 'other';
-    body = (
-      <>
-        <div className="setup-options" role="radiogroup" aria-label={title}>
-          {opts.map((o) => (
-            <OptionButton
-              key={String(o.value)}
-              o={o}
-              label={labelFor(o)}
-              selected={value === o.value}
-              onClick={() => {
-                // Keep the region when she taps the same country again (e.g. after going back)
-                const changed = answers.country !== o.value;
-                if (o.value === 'other') set({ country: 'other', ...(changed ? { region: undefined } : {}) });
-                else {
-                  set({ country: o.value as SetupAnswers['country'], countryOther: undefined, ...(changed ? { region: undefined, geo: undefined } : {}) });
-                  pickSingle(o.value);
-                }
-              }}
-            />
-          ))}
-        </div>
-        {other ? (
-          <label className="setup-field">
-            <span>{T('type_country')}</span>
-            <input className="setup-input" value={answers.countryOther ?? ''} autoFocus onChange={(e) => set({ countryOther: e.target.value })} autoComplete="country-name" />
-          </label>
-        ) : null}
-      </>
-    );
-    canContinue = value !== undefined && (!other || Boolean(answers.countryOther?.trim()));
-  } else if (q.kind === 'location') {
-    body = <LocationStep answers={answers} set={set} T={T} opts={opts} lang={lang} />;
-    canContinue = true;
+function StepScreen(p: StepProps) {
+  switch (p.step) {
+    case 'who':
+      return <WhoStep {...p} />;
+    case 'country':
+      return <CountryStep {...p} />;
+    case 'place':
+      return <PlaceStep {...p} />;
+    case 'language':
+      return <LanguageStep {...p} />;
+    case 'mothers':
+      return <MothersStep {...p} />;
+    case 'not_doctor':
+      return <NotDoctorStep {...p} />;
+    case 'consent':
+      return <ConsentStep {...p} />;
+    case 'clinic':
+      return <ClinicStep {...p} />;
+    default:
+      return <QuestionStep {...p} />;
   }
+}
 
-  const showContinue = q.kind !== 'single' && !(q.kind === 'choice_or_text' && value !== 'other');
-
+function WhoStep({ answers, pickThenNext, common, onSkipAll, firstStepExtra }: StepProps) {
+  const opts: Array<{ id: Audience; label: string; hint: string; icon: IconType }> = [
+    { id: 'health_worker', label: 'A health worker', hint: 'Midwife, nurse, CHEW, CHP, CHO or doctor', icon: HeartHand },
+    { id: 'supervisor', label: 'A supervisor or programme officer', hint: 'You look after health workers or the numbers for an area', icon: UsersRight },
+    { id: 'personal', label: 'Myself or my family', hint: 'You are pregnant, or caring for a baby or young child', icon: Home03 },
+  ];
   return (
-    <section className="setup-screen" aria-labelledby="setup-q-title">
-      <header className="setup-top">
-        <button type="button" className="setup-link" onClick={onBack} disabled={!onBack} aria-hidden={!onBack} style={{ visibility: onBack ? 'visible' : 'hidden' }}>
-          <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
-            <path d="M15 5l-7 7 7 7" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" />
-          </svg>
-          {T('back')}
-        </button>
-        <span className="setup-count">{T('step', { n: index + 1, total })}</span>
-        {q.skippable ? (
-          <button type="button" className="setup-link" onClick={() => (q.id !== 'location' && answers[key] === undefined ? (set({ [key]: Array.isArray(answers[key]) ? ['not_sure'] : 'not_sure' } as Partial<SetupAnswers>), onNext()) : onNext())}>
-            {T('skip')}
-          </button>
-        ) : (
-          <span className="setup-link-spacer" />
-        )}
-      </header>
-      <Dots index={index} total={total} />
-      <h1 className="setup-title" id="setup-q-title" tabIndex={-1} ref={headingRef}>
-        {title}
-      </h1>
-      {q.help ? <p className="setup-help">{q.help}</p> : null}
-      {body}
-      {showContinue ? (
-        <div className="setup-actions">
-          <button type="button" className="setup-primary" disabled={!canContinue} onClick={onNext}>
-            {T('continue')}
-          </button>
-        </div>
-      ) : null}
+    <StepFrame {...common} onBack={undefined} title="Who will use Gaskin?" lede="Gaskin sets itself up around the answer. It takes about three minutes." icon={Heart} testId="step-who">
+      <ChoiceList label="Who will use Gaskin?">
+        {opts.map((o) => (
+          <Choice
+            key={o.id}
+            label={o.label}
+            hint={o.hint}
+            icon={o.icon}
+            selected={answers.audience === o.id}
+            testId={`who-${o.id}`}
+            onPress={() =>
+              pickThenNext({
+                audience: o.id,
+                role: o.id === 'personal' ? ('personal' as never) : o.id === 'supervisor' ? 'supervisor' : answers.role === 'supervisor' || (answers.role as string) === 'personal' ? undefined : answers.role,
+              })
+            }
+          />
+        ))}
+      </ChoiceList>
       {onSkipAll ? (
-        <p className="setup-skipall">
-          <button type="button" className="setup-link" onClick={onSkipAll}>
-            Skip setup and look around the demo
+        <p className="mt-6 text-center">
+          <button type="button" onClick={onSkipAll} className="inline-flex h-11 cursor-pointer items-center rounded-lg px-3 text-sm font-semibold text-tertiary outline-focus-ring hover:text-secondary focus-visible:outline-2" data-testid="skip-all">
+            Look around the demo first
           </button>
         </p>
       ) : null}
-    </section>
+      {firstStepExtra}
+    </StepFrame>
   );
 }
 
-// ---------------------------------------------------------------------------
-// Location: use my location (with consent), pick a region, or type one
-// ---------------------------------------------------------------------------
+function CountryStep({ answers, set, pickThenNext, next, common }: StepProps) {
+  const [open, setOpen] = useState(false);
+  const countries = useMemo(() => listCountries(), []);
+  const code = answers.countryCode ?? (isLaunch(answers.country as string) ? (answers.country as string) : undefined);
+  const choose = (c: string, advance = true) => {
+    const changed = c !== code;
+    const patch: Partial<WizardAnswers> = {
+      countryCode: c,
+      country: isLaunch(c) ? c : 'other',
+      countryOther: isLaunch(c) ? undefined : countryName(c),
+      ...(changed ? { region: undefined, district: undefined, geo: undefined, workerLanguage: undefined, mothersLanguages: undefined } : {}),
+    };
+    if (advance) pickThenNext(patch);
+    else set(patch);
+  };
+  const items: PickItem[] = countries.map((c) => ({ id: c.code, label: c.name, glyph: flagOf(c.code), group: c.launch ? 'Where Gaskin has local data' : 'All countries', keywords: c.code }));
+  return (
+    <StepFrame {...common} title="Which country are you in?" lede="This sets the languages, the emergency number and the health advice for your area." icon={Globe02} testId="step-country"
+      footer={code ? <PrimaryButton onPress={next}>Continue</PrimaryButton> : undefined}>
+      <ChoiceList label="Country">
+        {['NG', 'GH', 'KE'].map((c) => (
+          <Choice key={c} label={countryName(c)} glyph={flagOf(c)} selected={code === c} onPress={() => choose(c)} testId={`country-${c}`} />
+        ))}
+      </ChoiceList>
+      <div className="mt-6">
+        <PickerField label="Somewhere else" value={code && !isLaunch(code) ? countryName(code) : undefined} glyph={code && !isLaunch(code) ? flagOf(code) : undefined} placeholder="Search all countries" onOpen={() => setOpen(true)} testId="country-picker" />
+      </div>
+      <SearchSheet
+        open={open}
+        onClose={() => setOpen(false)}
+        title="Choose your country"
+        items={items}
+        selected={code ? [code] : []}
+        placeholder="Type a country"
+        testId="country-sheet"
+        onPick={(id) => {
+          setOpen(false);
+          choose(id, false);
+        }}
+      />
+    </StepFrame>
+  );
+}
 
-function LocationStep({ answers, set, T, opts }: { answers: SetupAnswers; set: (p: Partial<SetupAnswers>) => void; T: TFn; opts: QuestionOption[]; lang: WorkerLanguage }) {
-  const [geoState, setGeoState] = useState<'idle' | 'asking' | 'found' | 'failed'>(answers.geo ? 'found' : 'idle');
-  const [guess, setGuess] = useState<string | null>(null);
-  const launch = answers.country === 'NG' || answers.country === 'KE' || answers.country === 'GH';
-  const known = launch ? listRegions(answers.country as 'NG' | 'KE' | 'GH') : [];
-  const typed = answers.region !== undefined && answers.region !== 'not_sure' && !known.includes(answers.region);
-  const [otherOpen, setOtherOpen] = useState(typed);
+function PlaceStep({ answers, set, next, T, common }: StepProps) {
+  const code = answers.countryCode ?? (answers.country as string);
+  const regions = useMemo(() => listRegionsFor(code), [code]);
+  const districts = useDistricts(code, answers.region);
+  const words = regionWords(code);
+  const [sheet, setSheet] = useState<'region' | 'district' | null>(null);
+  const [geo, setGeo] = useState<'idle' | 'asking' | 'found' | 'failed'>(answers.geo ? 'found' : 'idle');
+  const region = answers.region && answers.region !== 'not_sure' ? answers.region : '';
+  const personal = answers.audience === 'personal';
 
   const useMine = async () => {
-    setGeoState('asking');
+    setGeo('asking');
     const pos = await requestPosition();
-    if (!pos) return setGeoState('failed');
+    if (!pos) return setGeo('failed');
     const near = nearestRegion(pos.lat, pos.lon);
-    set({ geo: pos, ...(near && (!launch || near.country === answers.country) ? { country: near.country, region: near.region } : {}) });
-    setGuess(near ? near.region : null);
-    setGeoState(near ? 'found' : 'failed');
-  };
-
-  return (
-    <div className="setup-location">
-      <div className="setup-geo">
-        <button type="button" className="setup-option setup-geo-btn" onClick={useMine} disabled={geoState === 'asking'}>
-          <span className="setup-option-icon">
-            <SetupIcon name="pin" />
-          </span>
-          <span className="setup-option-text">
-            <span className="setup-option-label">{geoState === 'asking' ? '…' : T('use_location')}</span>
-            <span className="setup-option-hint">{T('location_consent')}</span>
-          </span>
-        </button>
-        {geoState === 'found' && guess ? <p className="setup-note setup-note-ok">{T('location_found', { region: guess })}</p> : null}
-        {geoState === 'failed' ? <p className="setup-note">{T('location_failed')}</p> : null}
-      </div>
-      {launch ? (
-        <>
-          <p className="setup-help">{T('location_where')}</p>
-          <div className="setup-options setup-options-compact" role="radiogroup">
-            {opts.map((o) => (
-              <OptionButton
-                key={String(o.value)}
-                o={o}
-                label={o.value === 'not_sure' ? T('not_sure') : o.label}
-                selected={o.value === '__other' ? otherOpen : !otherOpen && answers.region === o.value}
-                onClick={() => {
-                  if (o.value === '__other') {
-                    setOtherOpen(true);
-                    set({ region: '' });
-                  } else {
-                    setOtherOpen(false);
-                    set({ region: String(o.value) });
-                  }
-                }}
-              />
-            ))}
-          </div>
-        </>
-      ) : null}
-      {otherOpen || !launch ? (
-        <label className="setup-field">
-          <span>{launch ? (answers.country === 'NG' ? 'State' : answers.country === 'KE' ? 'County' : 'Region') : 'Province, state or region'}</span>
-          <input className="setup-input" value={answers.region && answers.region !== 'not_sure' ? answers.region : ''} onChange={(e) => set({ region: e.target.value })} />
-        </label>
-      ) : null}
-      <label className="setup-field">
-        <span>{T('district')}</span>
-        <input className="setup-input" value={answers.district ?? ''} placeholder={T('district_hint')} onChange={(e) => set({ district: e.target.value })} />
-      </label>
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Summary and apply
-// ---------------------------------------------------------------------------
-
-const STEP_ORDER: ApplyStepId[] = ['storage', 'languages', 'ai', 'place'];
-const STEP_KEY: Record<ApplyStepId, SetupKey> = { storage: 'step_storage', languages: 'step_lang', ai: 'step_ai', place: 'step_place' };
-
-function Card({ icon, title, children }: { icon: Parameters<typeof SetupIcon>[0]['name']; title: string; children: React.ReactNode }) {
-  return (
-    <section className="setup-card">
-      <div className="setup-card-head">
-        <span className="setup-card-icon">
-          <SetupIcon name={icon} size={32} />
-        </span>
-        <h2>{title}</h2>
-      </div>
-      <div className="setup-card-body">{children}</div>
-    </section>
-  );
-}
-
-function langName(code: string): string {
-  return (LANGUAGE_NAMES as Record<string, string>)[code] ?? (code === 'fr' ? 'French' : code);
-}
-
-interface SummaryProps {
-  plan: SetupPlan;
-  answers: SetupAnswers;
-  T: TFn;
-  lang: WorkerLanguage;
-  applying: boolean;
-  onBack: () => void;
-  onApply: (apiKey: string | undefined, onProgress: (p: ApplyProgress) => void) => Promise<void>;
-  headingRef: React.RefObject<HTMLHeadingElement | null>;
-}
-
-function Summary({ plan, T, applying, onBack, onApply, headingRef }: SummaryProps) {
-  const [apiKey, setApiKey] = useState('');
-  const [progress, setProgress] = useState<Partial<Record<ApplyStepId, ApplyProgress>>>({});
-  const [assistant, setAssistant] = useState<AssistantConnection | null>(null);
-  const [copied, setCopied] = useState(false);
-  const profile = plan.country !== 'other' && plan.region ? getLocationProfile(plan.country, plan.region) : null;
-
-  useEffect(() => {
-    if (plan.ai.mode === 'connect_assistant' && plan.ai.assistant) void connectAssistant(plan.ai.assistant).then(setAssistant);
-  }, [plan.ai.mode, plan.ai.assistant]);
-
-  const copy = async (text: string) => {
-    try {
-      await navigator.clipboard.writeText(text);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    } catch {
-      /* clipboard blocked: the address is selectable */
+    if (near && near.country === code) {
+      set({ geo: pos, region: near.region, district: undefined });
+      setGeo('found');
+    } else {
+      set({ geo: pos });
+      setGeo('failed');
     }
   };
 
   return (
-    <section className="setup-screen setup-summary" aria-labelledby="setup-sum-title">
-      <header className="setup-top">
-        <button type="button" className="setup-link" onClick={onBack} disabled={applying}>
-          <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
-            <path d="M15 5l-7 7 7 7" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" />
-          </svg>
-          {T('change_answers')}
-        </button>
-      </header>
-      <h1 className="setup-title" id="setup-sum-title" tabIndex={-1} ref={headingRef}>
-        {T('summary_title')}
-      </h1>
-      <p className="setup-help">{T('summary_intro')}</p>
+    <StepFrame
+      {...common}
+      title={personal ? 'Where do you live?' : 'Where do you work?'}
+      lede={`In ${countryName(code)}. This brings in local foods, nearby hospitals and the languages people speak.`}
+      icon={MarkerPin02}
+      onSkip={next}
+      skipLabel={T('skip')}
+      testId="step-place"
+      footer={<PrimaryButton onPress={next} testId="place-continue">Continue</PrimaryButton>}
+    >
+      <div className="grid gap-5">
+        {isLaunch(code) ? (
+          <button
+            type="button"
+            onClick={useMine}
+            disabled={geo === 'asking'}
+            className="flex min-h-16 w-full cursor-pointer items-center gap-4 rounded-2xl border border-dashed border-primary bg-primary p-4 text-left outline-focus-ring hover:bg-primary_hover focus-visible:outline-2 disabled:opacity-60"
+          >
+            <span className="grid size-10 shrink-0 place-items-center rounded-xl bg-brand-primary text-fg-brand-primary">
+              <MarkerPin02 aria-hidden="true" className="size-5" />
+            </span>
+            <span className="min-w-0">
+              <span className="block text-md font-semibold text-primary">{geo === 'asking' ? 'Finding you…' : T('use_location')}</span>
+              <span className="block text-sm text-tertiary">Asked once. Kept only on this device.</span>
+            </span>
+          </button>
+        ) : null}
+        {geo === 'found' && region ? <p className="flex items-center gap-2 text-sm text-success-primary"><CheckCircle aria-hidden="true" className="size-4" />Found: {region}</p> : null}
+        {geo === 'failed' ? <p className="text-sm text-tertiary">{T('location_failed')}</p> : null}
 
-      <div className="setup-cards">
-        <Card icon={plan.run.where === 'phone_app' ? 'phone_smart' : plan.run.where === 'facility_hub' ? 'computer_shared' : 'laptop'} title={T('card_run')}>
-          <p className="setup-strong">{plan.run.label}</p>
-          <p>{plan.run.reason}</p>
-        </Card>
+        {regions.length ? (
+          <PickerField label={words.region} value={region || undefined} placeholder={`Choose a ${words.region.toLowerCase()}`} onOpen={() => setSheet('region')} testId="region-picker" />
+        ) : (
+          <TextField label={words.region} value={region} onChange={(v) => set({ region: v, district: undefined })} placeholder="Type its name" testId="region-text" />
+        )}
+        {region ? (
+          districts.length ? (
+            <PickerField label={`${words.district} (optional)`} value={answers.district} placeholder={`Choose a ${words.district.toLowerCase()}`} onOpen={() => setSheet('district')} testId="district-picker" />
+          ) : (
+            <TextField label={`${words.district} (optional)`} value={answers.district ?? ''} onChange={(v) => set({ district: v })} placeholder="Type its name" testId="district-text" />
+          )
+        ) : null}
+      </div>
+      <SearchSheet
+        open={sheet === 'region'}
+        onClose={() => setSheet(null)}
+        title={`Choose your ${words.region.toLowerCase()}`}
+        items={regions.map((r) => ({ id: r, label: r }))}
+        selected={region ? [region] : []}
+        placeholder="Type to search"
+        testId="region-sheet"
+        allowFree={(t) => {
+          set({ region: t, district: undefined });
+          setSheet(null);
+        }}
+        onPick={(id) => {
+          set({ region: id, district: id === region ? answers.district : undefined });
+          setSheet(null);
+        }}
+      />
+      <SearchSheet
+        open={sheet === 'district'}
+        onClose={() => setSheet(null)}
+        title={`Choose your ${words.district.toLowerCase()}`}
+        items={districts.map((d) => ({ id: d, label: d }))}
+        selected={answers.district ? [answers.district] : []}
+        placeholder="Type to search"
+        allowFree={(t) => {
+          set({ district: t });
+          setSheet(null);
+        }}
+        onPick={(id) => {
+          set({ district: id });
+          setSheet(null);
+        }}
+      />
+    </StepFrame>
+  );
+}
 
-        <Card icon={plan.storage.mode === 'folder' ? 'computer_shared' : 'check'} title={T('card_storage')}>
-          <p className="setup-strong">{plan.storage.label}</p>
-          <p>{plan.storage.reason}</p>
-        </Card>
+function statusBadge(l: PlaceLanguage) {
+  if (!l.hasPack) return <ComingSoon />;
+  if (l.status && l.status !== 'reviewed') return <DraftBadge />;
+  return null;
+}
 
-        <Card icon="speech_many" title={T('card_languages')}>
-          <p className="setup-strong">
-            {langName(plan.languages.ui)} for you
-            {plan.languages.mothers.length ? `; ${plan.languages.mothers.map(langName).join(', ')} for mothers` : ''}
-          </p>
-          {plan.languages.notes.map((n) => (
-            <p key={n}>{n}</p>
+/** Language items for the "More languages" sheet: this place first, then every other. */
+export function languageItems(place: { country?: string; region?: string }, opts: { packOnly?: boolean } = {}): PickItem[] {
+  const local = new Set(languagesFor(place).map((l) => l.code));
+  return allLanguages(place).map((l) => ({
+    id: l.code,
+    label: l.nativeName,
+    detail: l.nativeName !== l.name ? l.name : undefined,
+    keywords: `${l.name} ${l.code}`,
+    group: local.has(l.code) ? 'Spoken here' : 'Other languages',
+    badge: statusBadge(l),
+    disabled: opts.packOnly ? !l.hasPack : false,
+    lang: l.code,
+  }));
+}
+
+function LanguageStep({ answers, pickThenNext, set, next, common }: StepProps) {
+  const code = answers.countryCode ?? (answers.country as string);
+  const place = { country: code, region: answers.region, district: answers.district };
+  const suggestions = useMemo(() => {
+    // The place's own languages first (packless ones show "Coming soon"), and English always.
+    const l = languagesFor(place);
+    const top = l.slice(0, 4);
+    return top.some((x) => x.code === 'en') ? top : [...top.slice(0, 3), ...languagesFor({ country: 'GB' }).filter((x) => x.code === 'en')];
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [code, answers.region, answers.district]);
+  const [open, setOpen] = useState(false);
+  const cur = answers.workerLanguage;
+  const extraChosen = cur && !suggestions.some((s) => s.code === cur);
+  const personal = answers.audience === 'personal';
+  return (
+    <StepFrame
+      {...common}
+      title={personal ? 'Which language do you read best?' : 'Which language do you want Gaskin in?'}
+      lede={`Suggested for ${answers.region ? `${answers.region}, ` : ''}${countryName(code)}. You can change it any time.`}
+      icon={Translate01}
+      testId="step-language"
+      footer={cur ? <PrimaryButton onPress={next}>Continue</PrimaryButton> : undefined}
+    >
+      <ChoiceList label="Language" columns={2}>
+        {suggestions.map((l) => (
+          <Choice
+            key={l.code}
+            label={l.nativeName}
+            hint={l.nativeName !== l.name ? l.name : undefined}
+            glyph={l.code.slice(0, 2).toUpperCase()}
+            lang={l.code}
+            selected={cur === l.code}
+            badge={statusBadge(l)}
+            disabled={!l.hasPack}
+            testId={`lang-${l.code}`}
+            onPress={() => pickThenNext({ workerLanguage: l.code as WorkerLanguage })}
+          />
+        ))}
+        {extraChosen ? <Choice label={languageName(cur!, true)} hint={languageName(cur!)} glyph={cur!.slice(0, 2).toUpperCase()} selected onPress={() => setOpen(true)} /> : null}
+      </ChoiceList>
+      <div className="mt-4">
+        <SecondaryButton onPress={() => setOpen(true)} icon={Globe02} testId="more-languages">
+          More languages
+        </SecondaryButton>
+      </div>
+      <SearchSheet
+        open={open}
+        onClose={() => setOpen(false)}
+        title="All languages"
+        items={languageItems(place, { packOnly: true })}
+        selected={cur ? [cur] : []}
+        placeholder="Search by name, in any language"
+        testId="language-sheet"
+        onPick={(id) => {
+          set({ workerLanguage: id as WorkerLanguage });
+          setOpen(false);
+        }}
+      />
+    </StepFrame>
+  );
+}
+
+function MothersStep({ answers, set, next, T, common }: StepProps) {
+  const code = answers.countryCode ?? (answers.country as string);
+  const place = { country: code, region: answers.region, district: answers.district };
+  const suggestions = useMemo(() => languagesFor(place).slice(0, 6), [code, answers.region, answers.district]); // eslint-disable-line react-hooks/exhaustive-deps
+  const [open, setOpen] = useState(false);
+  const chosen = (answers.mothersLanguages ?? []).filter((x) => x !== 'not_sure') as string[];
+  const toggle = (c: string) => set({ mothersLanguages: (chosen.includes(c) ? chosen.filter((x) => x !== c) : [...chosen, c]) as never });
+  const extras = chosen.filter((c) => !suggestions.some((s) => s.code === c));
+  return (
+    <StepFrame
+      {...common}
+      title="Which languages do the mothers speak?"
+      lede="Pick all that apply. Messages and picture cards are made ready in these. Languages marked Coming soon use English for now."
+      icon={MessageChatSquare}
+      onSkip={() => {
+        // Not sure: the place's three most spoken languages, never another country's.
+        set({ mothersLanguages: (isLaunch(code) ? ['not_sure'] : suggestions.slice(0, 3).map((l) => l.code)) as never });
+        next();
+      }}
+      skipLabel={T('skip')}
+      testId="step-mothers"
+      footer={<PrimaryButton onPress={next} disabled={!chosen.length}>Continue</PrimaryButton>}
+    >
+      <ChoiceList label="Mothers’ languages" multi columns={2}>
+        {[...suggestions, ...extras.map((c) => languagesFor({ country: code }).find((l) => l.code === c) ?? { code: c, name: languageName(c), nativeName: languageName(c, true), hasPack: false })].map((l) => (
+          <Choice key={l.code} multi label={l.nativeName} hint={l.nativeName !== l.name ? l.name : undefined} glyph={l.code.slice(0, 2).toUpperCase()} lang={l.code} selected={chosen.includes(l.code)} badge={statusBadge(l)} onPress={() => toggle(l.code)} testId={`mlang-${l.code}`} />
+        ))}
+      </ChoiceList>
+      <div className="mt-4">
+        <SecondaryButton onPress={() => setOpen(true)} icon={Globe02}>
+          More languages
+        </SecondaryButton>
+      </div>
+      <SearchSheet open={open} onClose={() => setOpen(false)} title="Mothers’ languages" multi items={languageItems(place)} selected={chosen} placeholder="Search by name, in any language" onPick={toggle} />
+    </StepFrame>
+  );
+}
+
+/** The device and work questions, drawn from src/setup/questions with big icons. */
+function QuestionStep({ step, answers, set, pickThenNext, next, T, common }: StepProps) {
+  const id = step.slice(2);
+  const q = visibleQuestions(answers).find((x) => x.id === id) as Question | undefined;
+  if (!q) return null;
+  const key = q.id as keyof SetupAnswers;
+  const value = answers[key] as unknown;
+  const opts = q.options(answers);
+  const title = T(`q.${q.id}` as SetupKey, undefined, q.title);
+  const label = (o: QuestionOption) => (o.value === 'not_sure' ? T('not_sure') : o.label);
+  const skip = q.skippable
+    ? () => {
+        if (answers[key] === undefined) set({ [key]: q.kind === 'multi' ? ['not_sure'] : 'not_sure' } as Partial<WizardAnswers>);
+        next();
+      }
+    : undefined;
+  if (q.kind === 'multi') {
+    const arr = (Array.isArray(value) ? value : []) as Array<string | number>;
+    const toggle = (o: QuestionOption) => {
+      let n: Array<string | number>;
+      if (arr.includes(o.value)) n = arr.filter((x) => x !== o.value);
+      else if (o.exclusive) n = [o.value];
+      else n = [...arr.filter((x) => !opts.find((p) => p.value === x)?.exclusive), o.value];
+      set({ [key]: n } as Partial<WizardAnswers>);
+    };
+    return (
+      <StepFrame {...common} title={title} lede={q.help ?? T('pick_all')} onSkip={skip} skipLabel={T('skip')} testId={`step-${q.id}`} footer={<PrimaryButton onPress={next} disabled={!arr.length}>{T('continue')}</PrimaryButton>}>
+        <ChoiceList label={title} multi columns={opts.length > 5 ? 2 : 1}>
+          {opts.map((o) => (
+            <Choice key={String(o.value)} multi label={label(o)} hint={o.hint} icon={SETUP_ICONS[o.icon]} selected={arr.includes(o.value)} onPress={() => toggle(o)} size={opts.length > 6 ? 'md' : 'lg'} />
           ))}
-        </Card>
+        </ChoiceList>
+      </StepFrame>
+    );
+  }
+  return (
+    <StepFrame {...common} title={title} lede={q.help} onSkip={skip} skipLabel={T('skip')} testId={`step-${q.id}`}>
+      <ChoiceList label={title} columns={opts.length > 5 ? 2 : 1}>
+        {opts.map((o) => (
+          <Choice key={String(o.value)} label={label(o)} hint={o.hint} icon={SETUP_ICONS[o.icon]} selected={value === o.value} onPress={() => pickThenNext({ [key]: o.value } as Partial<WizardAnswers>)} size={opts.length > 6 ? 'md' : 'lg'} />
+        ))}
+      </ChoiceList>
+    </StepFrame>
+  );
+}
 
-        <Card icon="spark" title={T('card_ai')}>
-          <p className="setup-strong">{plan.ai.label}</p>
-          <p>{plan.ai.reason}</p>
-          {plan.ai.mode !== 'none' ? <p className="setup-privacy">{T('privacy_on')}</p> : null}
+// ---------------------------------------------------------------------------
+// Personal branch
+// ---------------------------------------------------------------------------
+
+function NotDoctorStep({ answers, next, common }: StepProps) {
+  const code = answers.countryCode ?? (answers.country as string);
+  const lines = personalDisclaimers(code);
+  return (
+    <StepFrame {...common} title="Gaskin is not a doctor" lede="It helps you plan and remember what to do for you and your baby. It cannot see or examine you." icon={HeartHand} testId="step-not-doctor" footer={<PrimaryButton onPress={next}>I understand</PrimaryButton>}>
+      <ul className="grid gap-3">
+        {lines.map((l, i) => (
+          <li key={l.id} className={cx('flex gap-3 rounded-2xl p-4 ring-1 ring-inset', l.id.endsWith('emergency') || l.id.endsWith('danger') ? 'bg-error-primary ring-error_subtle' : 'bg-secondary ring-secondary')}>
+            <span aria-hidden="true" className={cx('grid size-8 shrink-0 place-items-center rounded-full text-sm font-semibold', l.id.endsWith('emergency') || l.id.endsWith('danger') ? 'bg-error-solid text-on-fill' : 'bg-primary text-secondary ring-1 ring-secondary')}>
+              {l.id.endsWith('emergency') || l.id.endsWith('danger') ? <AlertTriangle className="size-4" /> : i + 1}
+            </span>
+            <span className={cx('text-md', l.id.endsWith('emergency') || l.id.endsWith('danger') ? 'font-medium text-error-primary' : 'text-secondary')}>{l.text}</span>
+          </li>
+        ))}
+      </ul>
+    </StepFrame>
+  );
+}
+
+function ConsentStep({ answers, set, next, common }: StepProps) {
+  const code = answers.countryCode ?? (answers.country as string);
+  const lines = consentLines(code);
+  const [ticked, setTicked] = useState<Record<string, boolean>>(() => {
+    const c = answers.consent;
+    const r: Record<string, boolean> = {};
+    if (c) {
+      r['legal.consent.understand'] = c.understandsNotDoctor;
+      r['legal.consent.emergency'] = c.knowsEmergency;
+      r['legal.consent.store'] = c.storeOnDevice;
+      r['legal.consent.ai'] = c.aiAllowed;
+      r['legal.consent.age'] = c.adultOrGuardian;
+    }
+    return r;
+  });
+  const ready = lines.filter((l) => l.required).every((l) => ticked[l.key]);
+  const agree = () => {
+    const c: PersonalConsent = {
+      version: CONSENT_VERSION,
+      agreedAt: new Date().toISOString(),
+      understandsNotDoctor: Boolean(ticked['legal.consent.understand']),
+      knowsEmergency: Boolean(ticked['legal.consent.emergency']),
+      storeOnDevice: Boolean(ticked['legal.consent.store']),
+      aiAllowed: Boolean(ticked['legal.consent.ai']),
+      adultOrGuardian: Boolean(ticked['legal.consent.age']),
+    };
+    saveConsent(c);
+    set({ consent: c });
+    next();
+  };
+  return (
+    <StepFrame {...common} title="Your agreement" lede="Tick each line you agree with. The last but one is your choice." icon={ShieldTick} testId="step-consent" footer={<PrimaryButton onPress={agree} disabled={!ready} testId="consent-agree">I agree</PrimaryButton>}>
+      <ChoiceList label="Your agreement" multi>
+        {lines.map((l) => (
+          <Choice key={l.key} multi size="md" label={l.text} hint={l.required ? undefined : 'Optional'} selected={Boolean(ticked[l.key])} onPress={() => setTicked((t) => ({ ...t, [l.key]: !t[l.key] }))} testId={`consent-${l.key.split('.').pop()}`} />
+        ))}
+      </ChoiceList>
+    </StepFrame>
+  );
+}
+
+function EmergencyCard({ country }: { country?: string }) {
+  const e = emergencyFor(country);
+  return (
+    <a href={`tel:${dialable(e.number)}`} className="flex items-center gap-4 rounded-2xl bg-error-primary p-5 ring-1 ring-error_subtle outline-focus-ring ring-inset focus-visible:outline-2" data-testid="emergency-card">
+      <span className="grid size-12 shrink-0 place-items-center rounded-xl bg-error-solid text-on-fill">
+        <PhoneCall01 aria-hidden="true" className="size-6" />
+      </span>
+      <span className="min-w-0">
+        <span className="block text-sm font-medium text-error-primary">Emergency in {countryName(country) || 'your country'}</span>
+        <span className="block text-display-xs font-semibold text-error-primary tnum">{e.number}</span>
+        {!e.verified ? <span className="block text-xs text-error-primary">Check this number locally. Gaskin could not confirm it.</span> : null}
+      </span>
+    </a>
+  );
+}
+
+function ClinicStep({ answers, next, common, env }: StepProps) {
+  const code = answers.countryCode ?? (answers.country as string);
+  const facilities = useMemo(() => {
+    try {
+      return (recommendSetup({ ...answers, audience: 'personal' } as SetupAnswers, env) as SetupPlan & { personal?: { nearestFacilities?: Array<{ name: string; town: string }> } }).personal?.nearestFacilities ?? [];
+    } catch {
+      return [];
+    }
+  }, [answers, env]);
+  return (
+    <StepFrame {...common} title="Register at a clinic too" lede="Gaskin works best alongside a midwife or nurse who knows you. Take your plan to every visit and show it to them." icon={Building02} testId="step-clinic" footer={<PrimaryButton onPress={next}>Continue</PrimaryButton>}>
+      <div className="grid gap-4">
+        <div className="grid gap-3 sm:grid-cols-3">
+          {[
+            { icon: Building02, t: 'Book your first check', d: 'At a health centre, as early as you can.' },
+            { icon: Phone01, t: 'Show them Gaskin', d: 'They can check your plan and add to it.' },
+            { icon: Clock, t: 'Go to every visit', d: 'At least 8 checks before birth.' },
+          ].map((x) => (
+            <div key={x.t} className="flex gap-3 rounded-2xl bg-secondary p-4 ring-1 ring-secondary ring-inset sm:flex-col">
+              <x.icon aria-hidden="true" className="size-6 shrink-0 text-fg-brand-primary" />
+              <div>
+                <p className="text-md font-semibold text-primary">{x.t}</p>
+                <p className="mt-0.5 text-sm text-tertiary">{x.d}</p>
+              </div>
+            </div>
+          ))}
+        </div>
+        {facilities.length ? (
+          <div className="rounded-2xl bg-primary p-4 ring-1 ring-secondary ring-inset">
+            <p className="text-sm font-medium text-tertiary">Hospitals near you</p>
+            <ul className="mt-2 grid gap-1.5">
+              {facilities.map((f) => (
+                <li key={f.name} className="flex items-center gap-2 text-md text-primary">
+                  <Building02 aria-hidden="true" className="size-4 shrink-0 text-fg-quaternary" />
+                  <span className="min-w-0 truncate">
+                    {f.name}
+                    {f.town ? <span className="text-tertiary">, {f.town}</span> : null}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
+        <p className="mt-2 text-md font-semibold text-primary">Save this number in your phone</p>
+        <EmergencyCard country={code} />
+      </div>
+    </StepFrame>
+  );
+}
+
+function PersonalReady({ answers, common, applying, onApply }: { answers: WizardAnswers; common: Common; applying: boolean; onApply: () => void }) {
+  const code = answers.countryCode ?? (answers.country as string);
+  return (
+    <StepFrame {...common} title="You are ready" lede="Here is what Gaskin will do for you." icon={CheckCircle} testId="step-ready" footer={<PrimaryButton onPress={onApply} loading={applying} testId="apply-setup">{applying ? 'Getting ready…' : 'Open my plan'}</PrimaryButton>}>
+      <div className="grid gap-3 sm:grid-cols-2">
+        <SummaryCard icon={Translate01} title="Language" value={languageName(answers.workerLanguage ?? 'en', true)} detail={answers.workerLanguage && answers.workerLanguage !== 'en' ? 'Lines not yet translated show in English.' : undefined} />
+        <SummaryCard icon={MarkerPin02} title="Your area" value={answers.region ? `${answers.region}, ${countryName(code)}` : countryName(code)} detail="Local foods and nearby hospitals in your plan." />
+        <SummaryCard icon={Lock01} title="Your records" value="Kept on this phone" detail="Nothing is sent anywhere unless you choose to." />
+        <SummaryCard icon={Stars02} title="Smart help" value={answers.consent?.aiAllowed ? 'On, with names removed' : 'Off'} detail="Change it in Settings." />
+      </div>
+      <div className="mt-6">
+        <EmergencyCard country={code} />
+      </div>
+    </StepFrame>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Here is your setup
+// ---------------------------------------------------------------------------
+
+function SummaryCard({ icon: Icon, title, value, detail, children, tone = 'brand', testId }: { icon: IconType; title: string; value: ReactNode; detail?: ReactNode; children?: ReactNode; tone?: 'brand' | 'success'; testId?: string }) {
+  return (
+    <section className="flex min-w-0 flex-col rounded-2xl bg-primary p-5 shadow-xs ring-1 ring-secondary ring-inset" data-testid={testId}>
+      <div className="flex items-center gap-3">
+        <span className={cx('grid size-10 shrink-0 place-items-center rounded-xl', tone === 'success' ? 'bg-success-primary text-fg-success-primary' : 'bg-brand-primary text-fg-brand-primary')}>
+          <Icon aria-hidden="true" className="size-5" />
+        </span>
+        <h2 className="text-sm font-medium text-tertiary">{title}</h2>
+      </div>
+      <p className="mt-3 text-lg font-semibold text-primary">{value}</p>
+      {detail ? <p className="mt-1 text-sm text-tertiary">{detail}</p> : null}
+      {children ? <div className="mt-3">{children}</div> : null}
+    </section>
+  );
+}
+
+const CHANNEL_LABEL: Record<string, string> = { sms: 'SMS', whatsapp: 'WhatsApp', voice: 'Voice', print: 'Picture cards', email: 'Email' };
+const STEP_ORDER: ApplyStepId[] = ['storage', 'languages', 'ai', 'place'];
+const STEP_KEY: Record<ApplyStepId, SetupKey> = { storage: 'step_storage', languages: 'step_lang', ai: 'step_ai', place: 'step_place' };
+
+interface Extras {
+  apiKey?: string;
+  keyPersistence: KeyPersistence;
+  passphrase?: string;
+}
+
+function Summary({ answers, env, T, common, applying, onApply }: { answers: WizardAnswers; env: SetupEnvironment; T: TFn; common: Common; applying: boolean; onApply: (plan: SetupPlan, extras: Extras, onProgress: (p: ApplyProgress) => void) => Promise<void> }) {
+  const plan = useMemo(() => recommendSetup(answers, env), [answers, env]);
+  const [apiKey, setApiKey] = useState('');
+  const [keyPersistence, setKeyPersistence] = useState<KeyPersistence>('session');
+  const [protect, setProtect] = useState(false);
+  const [pass, setPass] = useState('');
+  const [progress, setProgress] = useState<Partial<Record<ApplyStepId, ApplyProgress>>>({});
+  const [assistant, setAssistant] = useState<AssistantConnection | null>(null);
+  useEffect(() => {
+    if (plan.ai.mode === 'connect_assistant' && plan.ai.assistant) void connectAssistant(plan.ai.assistant).then(setAssistant);
+  }, [plan.ai.mode, plan.ai.assistant]);
+  const RunIcon = plan.run.where === 'phone_app' ? Phone01 : plan.run.where === 'facility_hub' ? Monitor04 : Laptop02;
+  const passProblem = protect && pass ? passphraseProblem(pass) : null;
+  const canApply = !protect || (pass.length > 0 && !passProblem);
+  const usbOrFolder = plan.storage.mode === 'folder' || plan.run.where === 'laptop_usb';
+  const channels = [...plan.channels].sort((a, b) => Number(b.primary) - Number(a.primary));
+
+  return (
+    <StepFrame
+      {...common}
+      wide
+      backLabel={T('change_answers')}
+      title={T('summary_title')}
+      lede={T('summary_intro')}
+      icon={CheckCircle}
+      testId="setup-summary"
+      footer={
+        <PrimaryButton onPress={() => onApply(plan, { apiKey: apiKey.trim() || undefined, keyPersistence, passphrase: protect && pass ? pass : undefined }, (p) => setProgress((c) => ({ ...c, [p.step]: p })))} disabled={!canApply} loading={applying} testId="apply-setup">
+          {applying ? T('applying') : T('apply')}
+        </PrimaryButton>
+      }
+    >
+      <div className="grid items-start gap-4 md:grid-cols-2">
+        <SummaryCard icon={RunIcon} title={T('card_run')} value={plan.run.label} detail={plan.run.reason} testId="card-run" />
+        <SummaryCard icon={Translate01} title={T('card_languages')} value={`${languageName(plan.languages.ui, true)} for you`} testId="card-languages">
+          <div className="flex flex-wrap gap-1.5">
+            {plan.languages.mothers.map((l) => (
+              <span key={l} className="rounded-full bg-secondary px-2.5 py-1 text-sm font-medium text-secondary ring-1 ring-secondary ring-inset">
+                {languageName(l)}
+              </span>
+            ))}
+          </div>
+          {plan.languages.notes[0] ? <p className="mt-2 text-sm text-tertiary">{plan.languages.notes[0]}</p> : null}
+        </SummaryCard>
+        <SummaryCard icon={Stars02} title={T('card_ai')} value={plan.ai.label} detail={plan.ai.reason} testId="card-ai">
+          {plan.ai.mode !== 'none' ? (
+            <p className="flex items-center gap-2 text-sm text-success-primary">
+              <ShieldTick aria-hidden="true" className="size-4 shrink-0" />
+              {T('privacy_on')}
+            </p>
+          ) : null}
           {plan.ai.needsKey ? (
-            <label className="setup-field">
-              <span>{T('key_label', { service: plan.ai.needsKey.service })}</span>
-              <input className="setup-input" type="password" autoComplete="off" spellCheck={false} value={apiKey} onChange={(e) => setApiKey(e.target.value)} disabled={applying} />
-              <small>
-                {T('key_hint')}
-                {plan.ai.needsKey.getKeyUrl ? (
-                  <>
-                    {' '}
-                    <a href={plan.ai.needsKey.getKeyUrl} target="_blank" rel="noreferrer">
-                      Get a key
-                    </a>
-                  </>
-                ) : null}
-              </small>
-            </label>
+            <div className="mt-3 grid gap-3">
+              <TextField label={T('key_label', { service: plan.ai.needsKey.service })} type="password" autoComplete="off" value={apiKey} onChange={setApiKey} hint={T('key_hint')} />
+              {apiKey ? (
+                <fieldset>
+                  <legend className="mb-1.5 text-sm font-medium text-secondary">Keep the key</legend>
+                  <div className="grid gap-2">
+                    {(
+                      [
+                        ['session', 'Until I close Gaskin', 'Best on a shared phone or computer.'],
+                        ['device', 'Remember on this device', 'Anyone who can open this browser could find it.'],
+                        ['memory', 'Ask me every time', 'Never saved anywhere.'],
+                      ] as Array<[KeyPersistence, string, string]>
+                    ).map(([id, l, h]) => (
+                      <Choice key={id} size="md" label={l} hint={h} selected={keyPersistence === id} onPress={() => setKeyPersistence(id)} />
+                    ))}
+                  </div>
+                </fieldset>
+              ) : null}
+            </div>
           ) : null}
           {assistant ? (
-            <div className="setup-assistant">
-              <ol>
+            <div className="mt-3 grid gap-2 text-sm text-secondary">
+              <ol className="grid list-decimal gap-1 pl-5">
                 {assistant.steps.map((s) => (
                   <li key={s}>{s}</li>
                 ))}
               </ol>
               {assistant.kind === 'download' && assistant.downloadUrl ? (
-                <a className="setup-secondary" href={assistant.downloadUrl} download={assistant.fileName}>
-                  Download "Gaskin for Claude"
+                <a className="inline-flex h-11 w-max items-center rounded-lg px-3 font-semibold text-brand-secondary ring-1 ring-primary ring-inset hover:bg-primary_hover" href={assistant.downloadUrl} download={assistant.fileName}>
+                  Download Gaskin for Claude
                 </a>
               ) : null}
-              {assistant.kind === 'address' && assistant.address ? (
-                <div className="setup-copyrow">
-                  <code>{assistant.address}</code>
-                  <button type="button" className="setup-secondary" onClick={() => copy(assistant.address!)}>
-                    {copied ? 'Copied' : 'Copy'}
-                  </button>
-                </div>
-              ) : null}
-              {assistant.note ? <p className="setup-note">{assistant.note}</p> : null}
             </div>
           ) : null}
-        </Card>
-
-        <Card icon="chat" title={T('card_messages')}>
-          <ul className="setup-list">
-            {plan.channels.map((c) => (
-              <li key={c.channel}>
-                <strong>{c.channel === 'sms' ? 'SMS' : c.channel === 'whatsapp' ? 'WhatsApp' : c.channel === 'voice' ? 'Voice call or voice note' : c.channel === 'print' ? 'Printed picture cards' : 'Email'}</strong>
-                {c.primary ? ' (main)' : ''}: {c.reason}
+        </SummaryCard>
+        <SummaryCard icon={MessageChatSquare} title={T('card_messages')} value={channels.filter((c) => c.primary).map((c) => CHANNEL_LABEL[c.channel]).join(' and ') || 'SMS'} testId="card-channels">
+          <ul className="grid gap-2">
+            {channels.map((c) => (
+              <li key={c.channel} className="flex items-start gap-2 text-sm">
+                <span className={cx('mt-0.5 shrink-0 rounded-md px-1.5 py-0.5 text-xs font-semibold ring-1 ring-inset', c.primary ? 'bg-brand-primary text-brand-secondary ring-brand' : 'bg-secondary text-tertiary ring-secondary')}>{CHANNEL_LABEL[c.channel]}</span>
+                <span className="text-tertiary">{c.reason}</span>
               </li>
             ))}
           </ul>
-        </Card>
-
-        <Card icon="printer" title={T('card_print')}>
-          <p>{plan.printing.routine}</p>
-        </Card>
-
-        <Card icon="check" title={T('card_sync')}>
-          <p>{plan.sync.routine}</p>
-        </Card>
-
-        {profile ? (
-          <Card icon="map" title={T('card_place')}>
-            <p className="setup-strong">
-              {profile.region}
-              {plan.district ? `, ${plan.district}` : ''}
-            </p>
-            {profile.localFoods.length ? <p>Local foods in plans: {profile.localFoods.slice(0, 4).map((f) => f.householdMeasure).join('; ')}.</p> : null}
-            <p>{profile.malariaNote}</p>
-            {profile.referralFacilities.length ? <p>Referral: {profile.referralFacilities.map((f) => f.name).join('; ')}.</p> : null}
-          </Card>
-        ) : null}
-
-        <Card icon="star_4" title={T('card_first')}>
-          <ol className="setup-list setup-steps">
-            {plan.firstTenMinutes.map((s) => (
-              <li key={s}>{s}</li>
+        </SummaryCard>
+        <SummaryCard icon={Printer} title={T('card_print')} value={plan.printing.where === 'none' ? 'No printer for now' : plan.printing.where === 'own' ? 'Your printer' : plan.printing.where === 'facility' ? 'At your facility' : 'At the district office'} detail={plan.printing.routine} testId="card-print" />
+        <SummaryCard icon={Database02} title={T('card_storage')} value={plan.storage.label} detail={plan.storage.reason} testId="card-storage">
+          <div className="flex items-center gap-2 text-sm text-tertiary">
+            <RefreshCw01 aria-hidden="true" className="size-4" />
+            Backup every {plan.storage.backupEveryDays === 1 ? 'day' : `${plan.storage.backupEveryDays} days`}
+          </div>
+          <div className="mt-3">
+            <Choice
+              multi
+              size="md"
+              icon={Lock01}
+              label="Protect records with a passphrase"
+              hint={usbOrFolder ? 'Recommended: a lost USB stick or laptop cannot be read without it.' : 'Optional on a phone with a screen lock.'}
+              selected={protect}
+              onPress={() => setProtect((x) => !x)}
+              testId="protect-records"
+            />
+            {protect ? (
+              <div className="mt-3 grid gap-2">
+                <TextField label="Passphrase" type="password" autoComplete="new-password" value={pass} onChange={setPass} hint={passProblem ?? 'Three or four ordinary words work well.'} />
+                <p className="rounded-xl bg-warning-primary p-3 text-sm text-warning-primary ring-1 ring-border-warning_subtle ring-inset">
+                  If you forget it, nobody can open the records, not even your supervisor. Write it down and keep it with your PIN recovery code, somewhere locked.
+                </p>
+              </div>
+            ) : null}
+          </div>
+        </SummaryCard>
+        <section className="rounded-2xl bg-secondary p-5 ring-1 ring-secondary ring-inset md:col-span-2" data-testid="card-first">
+          <div className="flex items-center gap-3">
+            <span className="grid size-10 place-items-center rounded-xl bg-primary text-fg-brand-primary ring-1 ring-secondary">
+              <Clock aria-hidden="true" className="size-5" />
+            </span>
+            <h2 className="text-md font-semibold text-primary">{T('card_first')}</h2>
+          </div>
+          <ol className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            {plan.firstTenMinutes.map((s, i) => (
+              <li key={s} className="flex gap-3 rounded-xl bg-primary p-3 ring-1 ring-secondary ring-inset">
+                <span className="grid size-7 shrink-0 place-items-center rounded-full bg-brand-solid text-sm font-semibold text-on-fill tnum">{i + 1}</span>
+                <span className="text-sm text-secondary">{s}</span>
+              </li>
             ))}
           </ol>
-          {plan.notes.length ? (
-            <ul className="setup-list setup-notes">
-              {plan.notes.map((n) => (
-                <li key={n}>{n}</li>
-              ))}
-            </ul>
-          ) : null}
-        </Card>
+        </section>
       </div>
 
       {applying ? (
-        <ol className="setup-progress" aria-live="polite">
+        <ol className="mt-6 grid gap-2" aria-live="polite" data-testid="apply-progress">
           {STEP_ORDER.map((id) => {
             const p = progress[id];
             const state = p?.state ?? 'waiting';
             return (
-              <li key={id} className={`setup-progress-item is-${state}`}>
-                <span className="setup-progress-mark" aria-hidden="true">
-                  {state === 'done' || state === 'skipped' ? '✓' : state === 'fallback' ? '!' : state === 'running' ? '…' : ''}
+              <li key={id} className="flex items-center gap-3 text-md">
+                <span
+                  aria-hidden="true"
+                  className={cx(
+                    'grid size-7 shrink-0 place-items-center rounded-full',
+                    state === 'done' || state === 'skipped' ? 'bg-success-solid text-on-fill' : state === 'fallback' ? 'bg-warning-solid text-on-fill' : state === 'running' ? 'ring-2 ring-brand' : 'ring-1 ring-secondary',
+                  )}
+                >
+                  {state === 'done' || state === 'skipped' ? <CheckCircle className="size-4" /> : state === 'fallback' ? '!' : null}
                 </span>
-                <span>
+                <span className="min-w-0 text-secondary">
                   {T(STEP_KEY[id])}
                   {id === 'languages' && p?.progress !== undefined && state === 'running' ? ` ${Math.round(p.progress * 100)}%` : ''}
-                  {p?.note && state !== 'running' ? <small>{p.note}</small> : null}
+                  {p?.note && state !== 'running' ? <span className="block text-sm text-tertiary">{p.note}</span> : null}
                 </span>
               </li>
             );
           })}
         </ol>
       ) : null}
-
-      <div className="setup-actions setup-actions-sticky">
-        <button
-          type="button"
-          className="setup-primary setup-primary-big"
-          disabled={applying}
-          onClick={() => onApply(apiKey || undefined, (p) => setProgress((cur) => ({ ...cur, [p.step]: p })))}
-        >
-          {applying ? T('applying') : T('apply')}
-        </button>
-      </div>
-    </section>
+      <p className="mt-6 flex items-center gap-2 text-sm text-tertiary">
+        <ArrowRight aria-hidden="true" className="size-4" />
+        Next, you will add yourself as the first worker on this device and choose a PIN.
+      </p>
+    </StepFrame>
   );
 }
-
-// ---------------------------------------------------------------------------
-// Styles (prefixed, theme tokens with fallbacks)
-// ---------------------------------------------------------------------------
-
-const CSS = `
-.setup-root{min-height:100dvh;background:var(--paper,#f6f1e6);color:var(--ink,#221d17);font-family:var(--sans,system-ui,sans-serif);display:flex;justify-content:center;padding:0 var(--gutter,16px) 120px}
-.setup-screen{width:100%;max-width:640px;display:flex;flex-direction:column;gap:14px;padding-top:12px}
-.setup-top{display:flex;align-items:center;justify-content:space-between;gap:8px;min-height:52px}
-.setup-link{display:inline-flex;align-items:center;gap:4px;min-height:48px;padding:0 10px;margin:0 -10px;border:0;background:none;color:var(--clay-ink,#8a3a20);font:inherit;font-weight:600;font-size:1.05rem;cursor:pointer;border-radius:var(--r-m,10px)}
-.setup-link:disabled{opacity:.4;cursor:default}
-.setup-link:focus-visible,.setup-option:focus-visible,.setup-primary:focus-visible,.setup-secondary:focus-visible,.setup-input:focus-visible{outline:3px solid var(--focus,#a3482a);outline-offset:2px}
-.setup-link-spacer{width:48px}
-.setup-count{color:var(--ink-3,#7b7062);font-size:.95rem}
-.setup-dots{display:flex;gap:6px;flex-wrap:wrap;justify-content:center}
-.setup-dot{width:10px;height:10px;border-radius:50%;background:var(--line-2,#d0c3ab)}
-.setup-dot.is-done{background:var(--green,#2d5b45)}
-.setup-dot.is-here{background:var(--clay,#a3482a);transform:scale(1.35)}
-.setup-title{font-family:var(--serif,Georgia,serif);font-weight:500;font-size:clamp(1.6rem,5.4vw,2.2rem);line-height:1.18;margin:8px 0 0;outline:none}
-.setup-help{margin:0;color:var(--ink-2,#4f463b);font-size:1.05rem;line-height:1.45}
-.setup-options{display:grid;grid-template-columns:1fr;gap:10px}
-@media (min-width:560px){.setup-options{grid-template-columns:1fr 1fr}}
-.setup-options-compact .setup-option{min-height:64px}
-.setup-option{position:relative;display:flex;align-items:center;gap:14px;min-height:76px;width:100%;padding:12px 16px;text-align:left;border:2px solid var(--line,#e3d9c6);border-radius:var(--r-l,16px);background:var(--card,#fbf8f1);color:inherit;font:inherit;cursor:pointer;transition:border-color .15s,background .15s}
-.setup-option:hover{border-color:var(--line-2,#d0c3ab)}
-.setup-option.is-selected{border-color:var(--clay,#a3482a);background:var(--clay-soft,#f2dfd2)}
-.setup-option:disabled{opacity:.6}
-.setup-option-icon{flex:none;display:grid;place-items:center;width:52px;height:52px;color:var(--clay,#a3482a)}
-.setup-option-text{display:flex;flex-direction:column;gap:2px;min-width:0}
-.setup-option-label{font-size:1.15rem;font-weight:600;line-height:1.25}
-.setup-option-hint{font-size:.92rem;color:var(--ink-3,#7b7062);line-height:1.35}
-.setup-option-tick{position:absolute;top:8px;right:10px;color:var(--clay,#a3482a)}
-.setup-field{display:flex;flex-direction:column;gap:6px;font-weight:600}
-.setup-field small{font-weight:400;color:var(--ink-3,#7b7062)}
-.setup-input{min-height:56px;padding:0 14px;font:inherit;font-size:1.1rem;border:2px solid var(--line-2,#d0c3ab);border-radius:var(--r-m,10px);background:var(--raised,#fffdf8);color:inherit}
-.setup-actions{display:flex;justify-content:flex-end;padding-top:6px}
-.setup-actions-sticky{position:sticky;bottom:0;padding:12px 0 calc(12px + env(safe-area-inset-bottom,0px));background:linear-gradient(to top,var(--paper,#f6f1e6) 70%,transparent)}
-.setup-primary{min-height:60px;min-width:180px;padding:0 28px;border:0;border-radius:999px;background:var(--clay,#a3482a);color:var(--paper,#fff);font:inherit;font-size:1.15rem;font-weight:700;cursor:pointer}
-.setup-primary:disabled{opacity:.45;cursor:default}
-.setup-primary-big{width:100%;min-height:68px;font-size:1.25rem}
-.setup-secondary{display:inline-flex;align-items:center;justify-content:center;min-height:52px;padding:0 20px;border:2px solid var(--clay,#a3482a);border-radius:999px;background:none;color:var(--clay-ink,#8a3a20);font:inherit;font-weight:700;text-decoration:none;cursor:pointer}
-.setup-note{margin:0;padding:10px 12px;border-radius:var(--r-m,10px);background:var(--amber-soft,#f6e6c4);color:var(--ink,#221d17)}
-.setup-note-ok{background:var(--green-soft,#dde8de)}
-.setup-location{display:flex;flex-direction:column;gap:14px}
-.setup-geo{display:flex;flex-direction:column;gap:8px}
-.setup-geo-btn{border-style:dashed}
-.setup-skipall{text-align:center;margin:12px 0 0}
-.setup-cards{display:grid;gap:12px}
-.setup-card{border:1px solid var(--line,#e3d9c6);border-radius:var(--r-l,16px);background:var(--card,#fbf8f1);padding:14px 16px}
-.setup-card-head{display:flex;align-items:center;gap:10px}
-.setup-card-head h2{margin:0;font-size:.95rem;font-weight:700;letter-spacing:.02em;color:var(--ink-3,#7b7062);text-transform:uppercase}
-.setup-card-icon{color:var(--clay,#a3482a);display:grid}
-.setup-card-body p{margin:8px 0 0;line-height:1.45}
-.setup-strong{font-weight:700;font-size:1.08rem}
-.setup-privacy{font-size:.95rem;color:var(--green,#2d5b45)}
-.setup-list{margin:8px 0 0;padding-left:20px;display:grid;gap:6px;line-height:1.45}
-.setup-steps li::marker{font-weight:700;color:var(--clay,#a3482a)}
-.setup-notes{color:var(--ink-2,#4f463b);font-size:.95rem}
-.setup-assistant{margin-top:10px;display:grid;gap:10px}
-.setup-assistant ol{margin:0;padding-left:20px;display:grid;gap:4px}
-.setup-copyrow{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
-.setup-copyrow code{flex:1 1 220px;padding:12px;border-radius:var(--r-m,10px);background:var(--paper-sunk,#eee6d6);overflow-wrap:anywhere;user-select:all}
-.setup-progress{list-style:none;margin:8px 0 0;padding:0;display:grid;gap:8px}
-.setup-progress-item{display:flex;gap:10px;align-items:flex-start;font-size:1.05rem}
-.setup-progress-item small{display:block;color:var(--ink-3,#7b7062);font-size:.9rem}
-.setup-progress-mark{flex:none;display:grid;place-items:center;width:28px;height:28px;border-radius:50%;border:2px solid var(--line-2,#d0c3ab);font-weight:700}
-.setup-progress-item.is-done .setup-progress-mark,.setup-progress-item.is-skipped .setup-progress-mark{background:var(--green,#2d5b45);border-color:var(--green,#2d5b45);color:var(--paper,#fff)}
-.setup-progress-item.is-fallback .setup-progress-mark{background:var(--amber,#9a6110);border-color:var(--amber,#9a6110);color:var(--paper,#fff)}
-.setup-progress-item.is-running .setup-progress-mark{border-color:var(--clay,#a3482a);color:var(--clay,#a3482a)}
-.setup-icon{display:block}
-@media (prefers-reduced-motion:reduce){.setup-option,.setup-dot{transition:none}}
-`;
-
-// Re-exported so the UI can show the same "Not sure" label elsewhere
-export { NOT_SURE };

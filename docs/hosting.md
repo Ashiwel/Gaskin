@@ -66,7 +66,7 @@ The first admin account is created on first start from `ADMIN_PHONE` and `ADMIN_
 | programme_officer | Aggregate reports, costs and DHIS2 only; no named records |
 | admin | Manage accounts and facilities and read the full audit log; no clinical records unless also scoped |
 
-Sign-in is a phone number and a 4–8 digit PIN, because many health workers share phones and have no email. Easy PINs such as 1234 and 0000 are refused, five wrong PINs lock the account for 15 minutes, and the server stores only a scrypt hash of each PIN and a SHA-256 hash of each session token. For reviewers and the pitch video, `DEMO_PIN=… npm run seed-demo` loads the synthetic cohort with one account per demo worker; it refuses to run on a database with real records.
+Sign-in is a phone number and a 4–8 digit PIN, because many health workers share phones and have no email. Easy PINs such as 1234 and 0000 are refused, five wrong PINs lock the account for 15 minutes, ten attempts on one number in 15 minutes are refused from any address, and the server stores only a scrypt hash of each PIN and a SHA-256 hash of each session token. A session unused for 14 days ends; `POST /api/auth/refresh` swaps a token for a fresh one, up to 90 days after sign-in. For reviewers and the pitch video, `DEMO_PIN=… npm run seed-demo` loads the synthetic cohort with one account per demo worker; it refuses to run on a database with real records.
 
 ### Sync
 
@@ -79,8 +79,8 @@ The phone works offline and keeps an outbox. `POST /api/sync` takes the device i
 | Channel | Provider | Delivery report URL to set in the provider's dashboard |
 |---|---|---|
 | SMS (Nigeria) | Termii, DND route by default | `{PUBLIC_URL}/webhooks/termii` |
-| SMS (all three countries) | Africa's Talking | `{PUBLIC_URL}/webhooks/africastalking/sms`, inbound `/webhooks/africastalking/inbound` |
-| Voice | Africa's Talking | `{PUBLIC_URL}/webhooks/africastalking/voice` (voice callback) |
+| SMS (all three countries) | Africa's Talking | `{PUBLIC_URL}/webhooks/africastalking/sms?token={AT_WEBHOOK_TOKEN}`, inbound `/webhooks/africastalking/inbound?token={AT_WEBHOOK_TOKEN}` |
+| Voice | Africa's Talking | `{PUBLIC_URL}/webhooks/africastalking/voice?token={AT_WEBHOOK_TOKEN}` (voice callback) |
 | WhatsApp | Meta WhatsApp Cloud API | `{PUBLIC_URL}/webhooks/whatsapp`, verify token `WHATSAPP_VERIFY_TOKEN` |
 | Email | Any SMTP server | none: email is marked sent when the server accepts it |
 
@@ -132,6 +132,7 @@ Before real records go on a server, a deployment should be able to tick every li
 - **Consent.** Record each mother's consent to data processing and to messages (the server will not message her without it) and, where AI is on, to AI processing.
 - **Encryption in transit.** TLS on every public address; HSTS is set by the server's security headers.
 - **Encryption at rest.** Put `/data` (or the Postgres volume) on an encrypted disk: LUKS on a VPS, or the provider's encrypted volumes with keys you control. Encrypt backups before they leave the machine (`restic` or `age`), keep one copy off-site in the same country, and test a restore every quarter.
+- **Webhooks.** In live mode every gateway refuses callbacks it cannot verify: set `WHATSAPP_APP_SECRET`, `TERMII_WEBHOOK_SECRET` and `AT_WEBHOOK_TOKEN`, or forged receipts and fake inbound SMS are possible. With `NODE_ENV=production` the server will not start while any of these, or a wildcard `CORS_ORIGINS`, is unsafe.
 - **Secrets.** Keep `.env` readable by the service account only; never commit it. Rotate gateway keys and `AUDIT_IP_SALT` when anyone with access leaves.
 - **Accounts.** One account per person, never shared; remove leavers the same day; review who has which facility every quarter.
 - **Least privilege.** Programme officers see aggregates only; admins do not see records unless also scoped to a facility.

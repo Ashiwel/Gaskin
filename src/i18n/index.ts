@@ -58,7 +58,10 @@ export { markChecked, unmarkChecked, isCheckedLocally, getLocalReview, listLocal
 export type { LocalReview } from './reviews';
 export { backTranslate, setBackTranslator, backTranslatePrompt, hasTemplate } from './backTranslate';
 export type { BackTranslateArgs, BackTranslator } from './backTranslate';
-export { defaultPatientLanguage, REGION_LANGUAGE } from './patientLanguage';
-export type { LocationLike } from './patientLanguage';
+export { defaultPatientLanguage, motherLanguageInfo, REGION_LANGUAGE } from './patientLanguage';
+export type { LocationLike, PatientLanguage } from './patientLanguage';
+// Language identity beyond packs (any BCP-47 tag): see src/geo
+export { packFor, packStateFor, packStateLabel, PACK_STATE_LABELS, NO_PACK_NOTE } from '../geo/languages';
+export type { PackState } from '../geo/languages';
 export { LanguagePicker, DualLanguageView, ShowToMother, ConfidenceBadge } from './components';
 export type { LanguagePickerProps, DualLanguageViewProps, ShowToMotherProps, ConfidenceBadgeProps } from './components';

@@ -17,6 +17,8 @@ export const sw: LanguagePack = {
     'nav.today': 'Leo',
     'nav.mothers': 'Akina mama',
     'nav.dashboard': 'Muhtasari',
+    // Insights is the renamed Programme dashboard: same word as before, still a draft.
+    'nav.insights': 'Muhtasari',
     'nav.review': 'Kagua',
     'nav.library': 'Maktaba',
     'nav.messages': 'Ujumbe',

@@ -12,16 +12,27 @@ import { tw } from './packs/tw';
 import { ar } from './packs/ar';
 import { fr } from './packs/fr';
 import { bin, urh, luo, ee, dag, ff } from './packs/community';
+import { pt } from './packs/pt';
+import { zu } from './packs/zu';
+import { xh } from './packs/xh';
+import { rw } from './packs/rw';
+import { ln } from './packs/ln';
+import { ny } from './packs/ny';
+import { sn } from './packs/sn';
+import { lg } from './packs/lg';
+import { ki } from './packs/ki';
+import { st } from './packs/st';
+import { tn } from './packs/tn';
 
 /**
  * Packs are bundled with the demo. The install API is asynchronous and reports progress,
  * so a real one-time download (and an offline cache) can replace the simulation without
  * changing callers.
  */
-export const PACKS: Record<PackCode, LanguagePack> = { en, pcm, ha, yo, ig, sw, tw, ar, ff, fr, bin, urh, luo, ee, dag };
+export const PACKS: Record<PackCode, LanguagePack> = { en, pcm, ha, yo, ig, sw, tw, ar, ff, fr, bin, urh, luo, ee, dag, pt, zu, xh, rw, ln, ny, sn, lg, ki, st, tn };
 
-/** Display order: English first, then by launch country, Pidgin and French last */
-export const PACK_ORDER: PackCode[] = ['en', 'ha', 'yo', 'ig', 'bin', 'urh', 'ff', 'ar', 'sw', 'luo', 'tw', 'ee', 'dag', 'pcm', 'fr'];
+/** Display order: English first, then by launch country, Pidgin and French, then Portuguese and the Bantu-language drafts */
+export const PACK_ORDER: PackCode[] = ['en', 'ha', 'yo', 'ig', 'bin', 'urh', 'ff', 'ar', 'sw', 'luo', 'tw', 'ee', 'dag', 'pcm', 'fr', 'pt', 'zu', 'xh', 'st', 'tn', 'sn', 'ny', 'rw', 'ln', 'lg', 'ki'];
 
 export const INSTALLED_KEY = 'gaskin.i18n.installed.v1';
 

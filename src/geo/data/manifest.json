@@ -1,0 +1,56 @@
+{
+  "generatedBy": "scripts/geo/build.mjs",
+  "inputs": {
+    "npm": {
+      "iso-3166": "4.4.0",
+      "countries-list": "3.4.1",
+      "cldr-core": "48.2.0",
+      "cldr-localenames-full": "48.2.0"
+    },
+    "github": {
+      "ngAdm1": "https://media.githubusercontent.com/media/wmgeolab/geoBoundaries/9469f09/releaseData/gbOpen/NGA/ADM1/geoBoundaries-NGA-ADM1_simplified.geojson",
+      "ngAdm2": "https://media.githubusercontent.com/media/wmgeolab/geoBoundaries/9469f09/releaseData/gbOpen/NGA/ADM2/geoBoundaries-NGA-ADM2_simplified.geojson",
+      "ghDistricts": "https://raw.githubusercontent.com/EricBidopa/ghana-geo-data/c4570a4ea96445f9c58f0796dd7b8f0c9934bd84/data/ghana-locations.json",
+      "keAdm1": "https://media.githubusercontent.com/media/wmgeolab/geoBoundaries/9469f09/releaseData/gbOpen/KEN/ADM1/geoBoundaries-KEN-ADM1_simplified.geojson",
+      "keAdm2": "https://media.githubusercontent.com/media/wmgeolab/geoBoundaries/9469f09/releaseData/gbOpen/KEN/ADM2/geoBoundaries-KEN-ADM2_simplified.geojson",
+      "zaAdm1": "https://media.githubusercontent.com/media/wmgeolab/geoBoundaries/9469f09/releaseData/gbOpen/ZAF/ADM1/geoBoundaries-ZAF-ADM1_simplified.geojson",
+      "zaAdm3": "https://media.githubusercontent.com/media/wmgeolab/geoBoundaries/9469f09/releaseData/gbOpen/ZAF/ADM3/geoBoundaries-ZAF-ADM3_simplified.geojson"
+    },
+    "sha256": {
+      "https://registry.npmjs.org/iso-3166/-/iso-3166-4.4.0.tgz": "7b093e56a88e337e6c4a187646aa34db7182a4d269344e6b5d9c331a199ed856",
+      "https://registry.npmjs.org/countries-list/-/countries-list-3.4.1.tgz": "572934a82137ec58a84a3e32635ec589cb9788e8df408f15677c71009d2adff2",
+      "https://media.githubusercontent.com/media/wmgeolab/geoBoundaries/9469f09/releaseData/gbOpen/NGA/ADM1/geoBoundaries-NGA-ADM1_simplified.geojson": "edd28050c7f1ae40471424605f74e4d2df83502e4f301089761ae18f8ae2fbbf",
+      "https://media.githubusercontent.com/media/wmgeolab/geoBoundaries/9469f09/releaseData/gbOpen/NGA/ADM2/geoBoundaries-NGA-ADM2_simplified.geojson": "daac9ba2c98f0d8984085c8a5b3a5301fca362f3ca37e6ac7dfcc7633719fc1d",
+      "https://raw.githubusercontent.com/EricBidopa/ghana-geo-data/c4570a4ea96445f9c58f0796dd7b8f0c9934bd84/data/ghana-locations.json": "60ef97993c67e7a4b6b9536f24b8b7f81d0efba812452762404dddd39f07f4b3",
+      "https://media.githubusercontent.com/media/wmgeolab/geoBoundaries/9469f09/releaseData/gbOpen/KEN/ADM1/geoBoundaries-KEN-ADM1_simplified.geojson": "4d9e1b8a6d305ee2b2bbeeeb4dd6ec3cc52e44884f0f6065d14d255810f9eae4",
+      "https://media.githubusercontent.com/media/wmgeolab/geoBoundaries/9469f09/releaseData/gbOpen/KEN/ADM2/geoBoundaries-KEN-ADM2_simplified.geojson": "1330f031cf0fd00c7a0ef29ab09d0544da12482094a85d60165a1534e45d84ad",
+      "https://media.githubusercontent.com/media/wmgeolab/geoBoundaries/9469f09/releaseData/gbOpen/ZAF/ADM1/geoBoundaries-ZAF-ADM1_simplified.geojson": "e0be7fc729e409be2a1f596271b6d0aac5f704a066cd26cfa3bf9e23b1270fe3",
+      "https://media.githubusercontent.com/media/wmgeolab/geoBoundaries/9469f09/releaseData/gbOpen/ZAF/ADM3/geoBoundaries-ZAF-ADM3_simplified.geojson": "35cbea5cef92308a1894bdf6a68dfb49e73a90830bc62d3fb7d73d70f5ece3e6",
+      "https://registry.npmjs.org/cldr-core/-/cldr-core-48.2.0.tgz": "5310e0c7a06c1feb83dc8e54c8584bbe0b9c2ea8320172a18d541986b124585d",
+      "https://registry.npmjs.org/cldr-localenames-full/-/cldr-localenames-full-48.2.0.tgz": "7f2ac7fd3b5d90f56ad127f9ed5ae67b58b3e556818f55530b9f47bb81bcde57"
+    }
+  },
+  "counts": {
+    "countries": 249,
+    "subdivisionsFirstLevel": 4029,
+    "countriesWithSubdivisions": 200,
+    "NG": {
+      "states": 37,
+      "lgas": 774
+    },
+    "KE": {
+      "counties": 47,
+      "subCounties": 290
+    },
+    "GH": {
+      "regions": 16,
+      "districts": 261
+    },
+    "ZA": {
+      "provinces": 9,
+      "municipalities": 213
+    },
+    "languageTerritories": 249,
+    "languageNames": 531
+  }
+}

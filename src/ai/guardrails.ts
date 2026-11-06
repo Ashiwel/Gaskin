@@ -89,11 +89,14 @@ const STOP_MEDICINE_PATTERNS: Array<{ re: RegExp; label: string }> = [
   { re: /\bno\s+(?:need|wahala)\s+(?:make\s+you\s+)?take\b/i, label: 'no need take (Pidgin)' },
   { re: /\b(?:stop\s+to\s+take|you\s+fit\s+stop)\b/i, label: 'stop to take (Pidgin)' },
   { re: /\bacha\s+kutumia\b|\bacha\s+kumeza\b/i, label: 'acha kutumia (Swahili: stop using)' },
+  { re: /\b(?:stop|quit|discontinue)\s+(?:your\s+|the\s+|all\s+)?(?:iron|folic|folate|aspirin|calcium|insulin|methyldopa|nifedipine|labetalol|ARVs?|ART|antiretrovirals?|SP|fansidar|IPTp|metformin|vitamins?|supplements?|injections?|treatment)\b/i, label: 'stop a named medicine' },
 ];
 
 /** Unsafe when the plan has any alert: reassurance that could delay care */
 const REASSURANCE_PATTERNS: Array<{ re: RegExp; label: string }> = [
-  { re: /\bno\s+need\s+to\s+(?:go|come|visit|rush|worry)\b/i, label: 'no need to go' },
+  { re: /\bno\s+need\s+to\s+(?:go|come|visit|rush|worry|hurry)\b/i, label: 'no need to go' },
+  { re: /\b(?:no\s+(?:rush|hurry)|take\s+your\s+time|there\s+is\s+no\s+(?:rush|hurry))\b/i, label: 'no rush' },
+  { re: /\b(?:nothing\s+serious|not\s+serious|not\s+dangerous|harmless)\b/i, label: 'nothing serious' },
   { re: /\b(?:don'?t|do\s+not|doesn'?t\s+need\s+to|need\s+not)\s+(?:go|come|rush)\s+(?:to\s+)?(?:the\s+)?(?:hospital|clinic|health\s+cent(?:re|er)|facility)\b/i, label: "don't go to the hospital" },
   { re: /\b(?:it\s+is|it'?s|this\s+is|that\s+is|is\s+quite|is\s+completely|is\s+perfectly)\s+(?:quite\s+|completely\s+|perfectly\s+|very\s+)?normal\b/i, label: 'it is normal' },
   { re: /\bnothing\s+to\s+worry\s+about\b/i, label: 'nothing to worry about' },
@@ -185,10 +188,17 @@ export function validateAIText(text: string, plan: CarePlan, mother: Mother, opt
     );
   }
 
-  const leftover = t.match(/\[(?:MOTHER|BABY|CARER|WORKER|DOCTOR|PERSON|PHONE|EMAIL|ID|ADDRESS|COMMUNITY|FACILITY|REGION|DATE|EMERGENCY_LINE)\]/g);
+  const leftover = t.match(/\[(?:MOTHER|BABY|CARER|WORKER|DOCTOR|PERSON|PHONE|EMAIL|ID|ADDRESS|COMMUNITY|FACILITY|OTHER_FACILITY|PLACE|REGION|DATE|EMERGENCY_LINE)\]/g);
   if (leftover) issues.push(`Contains placeholder text (${[...new Set(leftover)].join(', ')}) that must be replaced before sending.`);
 
   if (/\[needs translation/i.test(t)) issues.push('Part of this text still needs translating before it is sent.');
+
+  // AI text is shown and sent as plain text. Markup or a link it was not given is a sign of injection or a
+  // made-up resource, and a link in an SMS to a mother is how phishing starts.
+  if (/<\s*\/?\s*(?:script|img|iframe|svg|a|style|object|embed|link|meta|form|input|on\w+)\b|javascript:/i.test(t)) issues.push('Contains web code or markup. Gaskin messages are plain text; remove it.');
+  const planLinks = new Set((planText.match(/https?:\/\/[^\s)]+/gi) ?? []).map((u) => u.toLowerCase()));
+  const links = (t.match(/\b(?:https?:\/\/|www\.)[^\s)]+/gi) ?? []).filter((u) => !planLinks.has(u.toLowerCase()));
+  if (links.length) issues.push(`Contains a link (${links[0].slice(0, 60)}) that is not in her plan. Never send a mother a link the plan did not give.`);
 
   return { ok: issues.length === 0, issues };
 }

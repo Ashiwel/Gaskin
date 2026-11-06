@@ -1,6 +1,9 @@
 import type { Alert, SymptomCode } from '../types';
 import { cite, COUNTRY_RULES } from '../clinical';
 import { daysBetween, shortDate } from './dates';
+import { facilityById } from '../data/directory';
+import { referralWhen } from '../visits/text';
+import { computeUnknowns, sideEffectAlerts, unknownAlerts } from './constraints';
 import {
   type Facts,
   ageDays,
@@ -15,6 +18,9 @@ import {
   ofKind,
   recentSymptoms,
   symptomSeverity,
+  babySymptomsFor,
+  growthFor,
+  isYoungest,
 } from './facts';
 
 /**
@@ -41,7 +47,7 @@ export function computeAlerts(f: Facts): AlertWithShort[] {
   const out: AlertWithShort[] = [];
   const rules = COUNTRY_RULES[f.mother.country];
   const hospital = rules.referralHospital;
-  const { mother: sx, baby: bsx } = recentSymptoms(f, RECENT_DAYS);
+  const { mother: sx } = recentSymptoms(f, RECENT_DAYS);
   const has = (s: SymptomCode) => sx.includes(s);
   const pregnant = f.pregnant;
   const postpartum = !pregnant && f.daysSinceBirth !== undefined && f.daysSinceBirth >= 0 && f.daysSinceBirth <= 42;
@@ -477,13 +483,18 @@ export function computeAlerts(f: Facts): AlertWithShort[] {
   }
 
   // ---------- Newborn and infant danger signs (WHO PNC rec 25, IMCI / PSBI 2024) ----------
-  const child = f.youngest;
-  const age = f.youngestAgeDays;
-  if (child && age !== undefined && age >= 0 && age <= 1000) {
+  // Every child under 1,000 days gets her own checks. The youngest keeps the original alert ids
+  // (compatibility); an older sibling's alerts carry '@childId'. Every child alert carries childId.
+  for (const child of f.under1000) {
+    const youngestChild = isYoungest(f, child);
+    const suffix = youngestChild ? '' : `@${child.id}`;
+    const age = daysBetween(child.dob, f.asOf);
+    const bsxChild = babySymptomsFor(f, child, RECENT_DAYS);
+    const childAdd = (a: Alert, short: string, finding: string) => add({ ...a, id: `${a.id}${suffix}`, childId: child.id }, short, finding);
     const young = age < 60; // young infant 0–59 days
     const babyTemp = latestVital(f, 'temperatureC', child.id);
     const bt = babyTemp && isRecent(f, babyTemp, 2) ? babyTemp.temperatureC : undefined;
-    const bhas = (s: SymptomCode) => bsx.includes(s);
+    const bhas = (s: SymptomCode) => bsxChild.includes(s);
     const signs: string[] = [];
     if (bhas('baby_not_feeding')) signs.push('not feeding');
     if (bhas('baby_convulsions')) signs.push('fits');
@@ -495,10 +506,10 @@ export function computeAlerts(f: Facts): AlertWithShort[] {
     const febrile = bhas('baby_fever') || (bt !== undefined && bt >= 37.5);
     if (febrile && young) signs.push(bt !== undefined ? `fever (${bt}°C)` : 'fever');
     if (bhas('baby_yellow_skin') && age <= 1) signs.push('yellow in the first day');
-    if (bhas('baby_cord_redness') && symptomSeverity(f, 'baby_cord_redness', 2) === 'severe') signs.push('cord redness spreading');
+    if (bhas('baby_cord_redness') && symptomSeverity(f, 'baby_cord_redness', 2, child.id, youngestChild) === 'severe') signs.push('cord redness spreading');
     const name = child.name || 'Baby';
     if (signs.length > 0) {
-      add(
+      childAdd(
         {
           id: young ? 'alert.newborn_danger' : 'alert.child_danger',
           level: 'emergency',
@@ -513,7 +524,7 @@ export function computeAlerts(f: Facts): AlertWithShort[] {
       );
     } else {
       if (febrile) {
-        add(
+        childAdd(
           {
             id: 'alert.child_fever',
             level: 'urgent',
@@ -528,7 +539,7 @@ export function computeAlerts(f: Facts): AlertWithShort[] {
         );
       }
       if (bhas('baby_yellow_skin')) {
-        add(
+        childAdd(
           {
             id: 'alert.jaundice',
             level: 'urgent',
@@ -543,7 +554,7 @@ export function computeAlerts(f: Facts): AlertWithShort[] {
         );
       }
       if (bhas('baby_cord_redness')) {
-        add(
+        childAdd(
           {
             id: 'alert.cord_infection',
             level: 'urgent',
@@ -558,7 +569,7 @@ export function computeAlerts(f: Facts): AlertWithShort[] {
         );
       }
       if (bhas('baby_diarrhoea')) {
-        add(
+        childAdd(
           {
             id: 'alert.child_diarrhoea',
             level: 'urgent',
@@ -576,10 +587,10 @@ export function computeAlerts(f: Facts): AlertWithShort[] {
       }
     }
     // Severe acute malnutrition: MUAC < 11.5 cm from 6 months (WHO/UNICEF 2009).
-    const growth = ofKind(f, 'growth').filter((g) => g.childId === child.id || (!g.childId && f.children.length === 1));
+    const growth = growthFor(f, child);
     const muac = [...growth].reverse().find((g) => g.muacCm !== undefined);
     if (muac && age >= 182 && muac.muacCm! < 11.5 && daysBetween(muac.at, f.asOf) <= 30) {
-      add(
+      childAdd(
         {
           id: 'alert.severe_malnutrition',
           level: 'urgent',
@@ -597,8 +608,12 @@ export function computeAlerts(f: Facts): AlertWithShort[] {
 
   // ---------- Open referrals from guided visits ----------
   // Findings with no symptom code (club foot, cleft palate, hips, eyes, development) reach the
-  // worker here, so every caller of buildPlan (UI, dashboard, MCP server, server) sees them.
+  // worker here, so every caller of buildPlan (UI, Insights, MCP server, server) sees them.
   for (const a of visitReferralAlerts(f)) add(a, a.level === 'warning' ? 'referral open' : 'refer today', a.title.replace(/^Referral open: /, ''));
+
+  // ---------- Unknown results that could hide danger, and serious side effects ----------
+  for (const a of unknownAlerts(f, computeUnknowns(f))) if (!out.some((x) => x.alert.id === a.alert.id)) out.push(a);
+  for (const a of sideEffectAlerts(f)) out.push(a);
 
   // Order: emergency, urgent, warning; stable within level.
   const rank = { emergency: 0, urgent: 1, warning: 2 } as const;
@@ -624,17 +639,15 @@ function capitalise(s: string): string {
   return s.charAt(0).toUpperCase() + s.slice(1);
 }
 
-/** Mother-facing template for a referral finding, by what was found. Keys live in src/visits/text.ts. */
-function referralTextKey(reason: string, urgency: 'emergency' | 'urgent' | 'routine'): string {
-  const r = reason.toLowerCase();
-  if (/club ?foot|talipes/.test(r)) return 'vt.finding.clubfoot';
-  if (/cleft/.test(r)) return 'vt.finding.cleft';
-  if (/hip/.test(r)) return 'vt.finding.hips';
-  if (/eye|red reflex|cataract/.test(r)) return 'vt.finding.eyes';
-  if (/spine|spina/.test(r)) return 'vt.finding.spine';
-  if (/genital|testis|testes|hypospadias/.test(r)) return 'vt.finding.genitalia';
-  if (/anus|anal|stool/.test(r)) return 'vt.finding.anus';
-  return urgency === 'emergency' ? 'vt.refer_now' : urgency === 'urgent' ? 'vt.refer_today' : 'vt.finding.refer';
+/**
+ * Mother-facing line for an open referral, matching its urgency: emergency "go now", urgent
+ * "go today", routine "go to {place} within N weeks". Every line names the place. Keys live in
+ * src/visits/text.ts; the finding's own explanation is told at the visit.
+ */
+function referralText(urgency: 'emergency' | 'urgent' | 'routine', place: string, note: string | undefined): { key: string; params: Record<string, string> } {
+  if (urgency === 'emergency') return { key: 'vt.refer_now', params: { place } };
+  if (urgency === 'urgent') return { key: 'vt.refer_today', params: { place } };
+  return { key: 'vt.refer_within', params: { place, when: referralWhen(note) ?? 'soon' } };
 }
 
 /**
@@ -648,17 +661,19 @@ export function visitReferralAlerts(f: Facts): Alert[] {
     .filter((r) => r.status === 'open' && /^vc-/.test(r.id) && daysBetween(r.at, f.asOf) <= 14)
     .map((r) => {
       const child = r.childId ? names.get(r.childId) : undefined;
-      const key = referralTextKey(r.reason, r.urgency);
+      const place = facilityById(r.toFacilityId)?.name ?? hospital;
+      const text = referralText(r.urgency, place, r.note);
       return {
         id: `alert.visit_referral.${r.id}`,
         level: r.urgency === 'emergency' ? 'emergency' : r.urgency === 'urgent' ? 'urgent' : 'warning',
         title: `Referral open: ${r.reason}`,
-        action: `${r.note ?? ''} Confirm she reached the clinic or ${hospital}; mark the referral arrived or completed.`.trim(),
+        action: `${r.note ?? ''} Confirm she reached ${place}; mark the referral arrived or completed.`.trim(),
         reason: `Found at the visit on ${shortDate(r.at)}${child ? ` (${child})` : ''}.`,
         sources: [],
         subject: r.childId ? 'child' : 'mother',
-        motherTextKey: key,
-        motherTextParams: { name: child ?? 'your baby', place: hospital },
+        ...(r.childId ? { childId: r.childId } : {}),
+        motherTextKey: text.key,
+        motherTextParams: text.params,
       } satisfies Alert;
     });
 }

@@ -23,6 +23,9 @@ How to work:
 - gaskin_draft_message drafts words for the mother. It never sends. The worker checks and sends it from Gaskin.
 - Use plain words. Many workers read English as a second language.`;
 
+/** Every number an assistant sends must be a real, finite number (no NaN, Infinity or 1e308) */
+const num = () => z.number().finite();
+// Length-capped here; anything that is not a known token is refused (and audited) by the handler
 const TOKEN = z.string().min(3).max(40).describe('The mother\'s token from gaskin_list_caseload, for example "M-7F3A".');
 const SCOPE = z
   .enum(['mine', 'facility', 'all'])
@@ -115,20 +118,20 @@ export function createServer(store: DataStore, gaskin: Gaskin): McpServer {
         daysAgo: z.number().int().min(0).max(60).optional().describe('When it was observed, in days before today (0 = today, the default).'),
         vitals: z
           .object({
-            systolic: z.number().optional().describe('Top BP number, mmHg'),
-            diastolic: z.number().optional().describe('Bottom BP number, mmHg'),
-            weightKg: z.number().optional(),
-            temperatureC: z.number().optional(),
-            pulse: z.number().optional(),
-            fundalHeightCm: z.number().optional(),
-            fetalHeartRate: z.number().optional(),
-            muacCm: z.number().optional(),
+            systolic: num().optional().describe('Top BP number, mmHg'),
+            diastolic: num().optional().describe('Bottom BP number, mmHg'),
+            weightKg: num().optional(),
+            temperatureC: num().optional(),
+            pulse: num().optional(),
+            fundalHeightCm: num().optional(),
+            fetalHeartRate: num().optional(),
+            muacCm: num().optional(),
           })
           .optional()
           .describe('For kind "vitals".'),
         symptoms: z
           .object({
-            codes: z.array(z.enum(SYMPTOM_CODES)).min(1).describe(`Symptom codes: ${SYMPTOM_CODES.join(', ')}.`),
+            codes: z.array(z.enum(SYMPTOM_CODES)).min(1).max(20).describe(`Symptom codes: ${SYMPTOM_CODES.join(', ')}.`),
             severity: z.enum(['mild', 'moderate', 'severe']).optional(),
             via: z.enum(['visit', 'sms', 'whatsapp', 'voice', 'worker_call']).optional().describe('How it was reported (default visit).'),
           })
@@ -137,15 +140,15 @@ export function createServer(store: DataStore, gaskin: Gaskin): McpServer {
         lab: z
           .object({
             test: z.enum(['haemoglobin', 'hiv', 'syphilis', 'hepatitis_b', 'malaria_rdt', 'urine_protein', 'urine_glucose', 'blood_glucose_fasting', 'ogtt_2h', 'genotype', 'blood_group', 'ultrasound']),
-            value: z.union([z.number(), z.string()]).describe('Number (haemoglobin g/dL, glucose mmol/L, urine protein 0-3) or "positive"/"negative"/text.'),
-            unit: z.string().optional(),
+            value: z.union([num(), z.string().max(80)]).describe('Number (haemoglobin g/dL, glucose mmol/L, urine protein 0-3) or "positive"/"negative"/text.'),
+            unit: z.string().max(20).optional(),
           })
           .optional()
           .describe('For kind "lab".'),
         screening: z
           .object({
             instrument: z.enum(['epds', 'phq9', 'phq2']),
-            score: z.number().int(),
+            score: z.number().int().min(0).max(30),
             selfHarmFlag: z.boolean().optional().describe('EPDS question 10 (thoughts of self-harm) answered positively.'),
           })
           .optional()
@@ -154,13 +157,13 @@ export function createServer(store: DataStore, gaskin: Gaskin): McpServer {
           .object({
             status: z.enum(['exclusive_breastfeeding', 'mixed', 'formula', 'complementary_with_breastmilk', 'complementary_no_breastmilk']),
             milkSupply: z.enum(['good', 'low', 'very_low']).optional(),
-            feedsPerDay: z.number().optional(),
+            feedsPerDay: num().optional(),
             latchProblem: z.boolean().optional(),
           })
           .optional()
           .describe('For kind "feeding".'),
         growth: z
-          .object({ weightKg: z.number().optional(), lengthCm: z.number().optional(), muacCm: z.number().optional(), headCircumferenceCm: z.number().optional() })
+          .object({ weightKg: num().optional(), lengthCm: num().optional(), muacCm: num().optional(), headCircumferenceCm: num().optional() })
           .optional()
           .describe('For kind "growth" (the baby).'),
         note: z.string().max(500).optional().describe('Short clinical note. Do not include names, phone numbers or places.'),
@@ -181,7 +184,7 @@ export function createServer(store: DataStore, gaskin: Gaskin): McpServer {
         token: TOKEN,
         channel: z.enum(['sms', 'whatsapp', 'email', 'voice', 'print']).optional().describe('Leave empty to use the channel Gaskin recommends for her phone and literacy.'),
         language: z.enum(LANGS).optional().describe('Language code. Leave empty for her own language.'),
-        itemIds: z.array(z.string()).optional().describe('Only these plan item ids (from gaskin_get_care_plan). Leave empty for the most important items.'),
+        itemIds: z.array(z.string().max(120)).max(30).optional().describe('Only these plan item ids (from gaskin_get_care_plan). Leave empty for the most important items.'),
       },
       annotations: { readOnlyHint: true, openWorldHint: false },
     },

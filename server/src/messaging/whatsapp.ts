@@ -42,6 +42,8 @@ export interface WhatsAppOptions {
   apiVersion: string;
   appSecret?: string;
   verifyToken?: string;
+  /** Refuse unsigned callbacks when no app secret is configured (live mode) */
+  requireAuth?: boolean;
   template: string;
   templateLanguage: string;
   fetch?: FetchFn;
@@ -121,9 +123,11 @@ export class WhatsAppGateway implements MessageGateway {
 
   async handleWebhook(req: WebhookRequest): Promise<WebhookResult> {
     if (req.method === 'GET') {
-      const ok = req.query['hub.mode'] === 'subscribe' && !!this.o.verifyToken && req.query['hub.verify_token'] === this.o.verifyToken;
+      const given = req.query['hub.verify_token'] ?? '';
+      const ok = req.query['hub.mode'] === 'subscribe' && !!this.o.verifyToken && given.length === this.o.verifyToken.length && timingSafeEqual(Buffer.from(given), Buffer.from(this.o.verifyToken));
       return { items: [], response: ok ? { status: 200, contentType: 'text/plain', body: req.query['hub.challenge'] ?? '' } : { status: 403, contentType: 'text/plain', body: 'forbidden' } };
     }
+    if (!this.o.appSecret && this.o.requireAuth) throw new WebhookAuthError('WHATSAPP_APP_SECRET is not set, so WhatsApp callbacks are refused in live mode');
     if (this.o.appSecret) {
       const sig = (req.headers['x-hub-signature-256'] ?? '').replace(/^sha256=/, '');
       const want = createHmac('sha256', this.o.appSecret).update(req.rawBody).digest('hex');

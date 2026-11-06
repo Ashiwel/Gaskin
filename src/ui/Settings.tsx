@@ -1,352 +1,209 @@
-import { useRef, useState } from 'react';
-import { useApp, SCHEMA, type AppState } from '../store';
-import { getAISettings, PROVIDER_OPTIONS, type AISettings, type ProviderOption } from '../ai';
-import { saveFile } from './HandoutSheet';
-import { useToast } from './components';
-import { AIBadge, configure, useAIStatus } from './ai';
-import { ICheckCircle, IDownload, IUpload } from './icons';
-import { AssistantSection, LanguagesSection, SetupSection, StorageSection } from './SettingsExtra';
+/**
+ * Settings: a left sub-navigation on desktop and a grouped list on phones (tap a row to open the
+ * section, Back to return). The open section is kept for the session, so a reload lands on it
+ * and openSettingsAt('ai') can open a section from elsewhere. Every setting persists: device preferences in src/ui/settings/prefs,
+ * place and languages in the saved setup, AI through src/ai, workers and locks through src/auth,
+ * storage through src/storage.
+ */
+import { useEffect, useMemo, useState, type FC } from 'react';
+import { ArrowLeft, Bell01, ClipboardCheck, Contrast01, Database02, Printer, RefreshCw01, Scale01, Send01, Shield02, Stars02, Translate01, User01, Users03 } from '@untitledui/icons';
+import { configure } from './ai';
+import { loadAISettings } from '../ai';
+import { useNav } from './nav';
+import { useAccounts, can } from './accounts/auth';
+import { AppearanceSection, LanguageRegionSection, ProfileSection, WorkersSection } from './settings/SectionsA';
+import { AISection, LegalSection, MessagingSection, NotificationsSection, PrintingSection, PrivacySection, SetupAgainSection, StorageSection, VisitsSection } from './settings/SectionsB';
+import { cx } from '../utils/cx';
+import { useBreakpoint } from '../hooks/use-breakpoint';
 
-const AI_KEY = 'gaskin.ai-settings.v1';
-
-/** Restore saved AI settings on start. The key stays on this device only. */
+/** Restore saved AI settings on start (the key from wherever she chose to keep it). */
 export function restoreAISettings() {
   try {
-    const raw = window.localStorage.getItem(AI_KEY);
-    if (raw) configure(JSON.parse(raw));
+    const s = loadAISettings();
+    if (s) configure(s as unknown as Record<string, unknown>);
   } catch {
-    /* storage blocked or settings invalid: keep defaults */
+    /* settings invalid: keep defaults */
   }
 }
 
-function persist(s: AISettings) {
+type SectionId = 'profile' | 'workers' | 'appearance' | 'language' | 'visits' | 'notifications' | 'messaging' | 'printing' | 'ai' | 'privacy' | 'storage' | 'setup' | 'legal';
+
+interface SectionDef {
+  id: SectionId;
+  label: string;
+  hint: string;
+  icon: FC<{ className?: string }>;
+  group: 'You' | 'Work' | 'Data and privacy' | 'Gaskin';
+}
+
+const ALL: SectionDef[] = [
+  { id: 'profile', label: 'Profile and facility', hint: 'Name, PIN', icon: User01, group: 'You' },
+  { id: 'workers', label: 'Workers', hint: 'Add, reset PIN, caseloads', icon: Users03, group: 'You' },
+  { id: 'appearance', label: 'Appearance', hint: 'Theme, text size', icon: Contrast01, group: 'You' },
+  { id: 'language', label: 'Language and region', hint: 'Languages, place, units', icon: Translate01, group: 'You' },
+  { id: 'visits', label: 'Visits', hint: 'Your questions, reminders', icon: ClipboardCheck, group: 'Work' },
+  { id: 'notifications', label: 'Notifications', hint: 'Due contacts, quiet hours', icon: Bell01, group: 'Work' },
+  { id: 'messaging', label: 'Messaging', hint: 'Channels, sender, SMS length', icon: Send01, group: 'Work' },
+  { id: 'printing', label: 'Printing', hint: 'Paper, handout language', icon: Printer, group: 'Work' },
+  { id: 'ai', label: 'AI assistant', hint: 'Mode, privacy, audit log', icon: Stars02, group: 'Data and privacy' },
+  { id: 'privacy', label: 'Privacy and security', hint: 'Lock, passphrase, your data', icon: Shield02, group: 'Data and privacy' },
+  { id: 'storage', label: 'Storage and backup', hint: 'Folder, USB, import', icon: Database02, group: 'Data and privacy' },
+  { id: 'setup', label: 'Run setup again', hint: 'New phone or new place', icon: RefreshCw01, group: 'Gaskin' },
+  { id: 'legal', label: 'About and legal', hint: 'Licences, version', icon: Scale01, group: 'Gaskin' },
+];
+
+const PERSONAL_HIDE: SectionId[] = ['workers', 'visits', 'messaging', 'printing'];
+
+const SECTION_KEY = 'gaskin.settings.section';
+
+function readSection(): SectionId | null {
   try {
-    window.localStorage.setItem(AI_KEY, JSON.stringify(s));
+    return (globalThis.sessionStorage?.getItem(SECTION_KEY) as SectionId | null) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function writeSection(id: SectionId | null) {
+  try {
+    if (id) globalThis.sessionStorage?.setItem(SECTION_KEY, id);
+    else globalThis.sessionStorage?.removeItem(SECTION_KEY);
   } catch {
     /* ignore */
   }
 }
 
-type CardId = AISettings['mode'];
-
-interface Card {
-  id: CardId;
-  title: string;
-  blurb: string;
-  cost: string;
-  needs: string;
-  privacy: string;
-}
-
-const TITLES: Partial<Record<CardId, string>> = {
-  none: 'No AI',
-  claude_here: 'Use Claude here',
-  own_key: 'Your own API key',
-  on_device: 'On this device',
-  any_app: 'Any AI app you already use',
-  auto: 'Automatic',
-};
-
-function cards(): Card[] {
-  const order: CardId[] = ['none', 'auto', 'claude_here', 'own_key', 'on_device', 'any_app'];
-  const byId = new Map<string, ProviderOption>(PROVIDER_OPTIONS.map((o) => [o.id, o]));
-  const out: Card[] = order
-    .map((id) => byId.get(id))
-    .filter((o): o is ProviderOption => Boolean(o))
-    .map((o) => ({ id: o.id, title: TITLES[o.id] ?? o.label, blurb: o.description, cost: o.cost, needs: o.needs, privacy: o.privacy }));
-  return out;
+/** Open Settings at a section (e.g. the AI pill opens 'ai'). Call before navigating to Settings. */
+export function openSettingsAt(id: SectionId): void {
+  writeSection(id);
 }
 
 export function Settings() {
-  const { state, dispatch } = useApp();
-  const toast = useToast();
-  const status = useAIStatus();
-  const initial = getAISettings();
-  const [mode, setMode] = useState<CardId>(initial.mode);
-  const ownPresets = PROVIDER_OPTIONS.find((o) => o.id === 'own_key')?.presets ?? [];
-  const devPresets = PROVIDER_OPTIONS.find((o) => o.id === 'on_device')?.presets ?? [];
-  const [own, setOwn] = useState(() => ({
-    kind: (initial.ownKey?.kind ?? 'openai_compatible') as NonNullable<AISettings['ownKey']>['kind'],
-    baseUrl: initial.ownKey?.baseUrl ?? ownPresets[0]?.baseUrl ?? '',
-    model: initial.ownKey?.model ?? ownPresets[0]?.model ?? '',
-    apiKey: initial.ownKey?.apiKey ?? '',
-  }));
-  const [dev, setDev] = useState(() => ({
-    kind: (initial.onDevice?.kind ?? 'local_server') as NonNullable<AISettings['onDevice']>['kind'],
-    baseUrl: initial.onDevice?.baseUrl ?? devPresets[0]?.baseUrl ?? 'http://localhost:11434/v1',
-    model: initial.onDevice?.model ?? devPresets[0]?.model ?? '',
-  }));
-  const [err, setErr] = useState('');
-  const [deid, setDeid] = useState<boolean>(() => (initial as { deidentify?: boolean }).deidentify !== false && initial.onDevice?.deidentify !== false);
-  const [confirmOff, setConfirmOff] = useState(false);
-  const fileRef = useRef<HTMLInputElement>(null);
-  const list = cards();
+  const { current } = useAccounts();
+  const { go } = useNav();
+  const personal = Boolean(current?.personal);
+  const sections = useMemo(
+    () => ALL.filter((s) => (s.id === 'workers' ? can(current, 'manage_workers') : true)).filter((s) => !(personal && PERSONAL_HIDE.includes(s.id))),
+    [current, personal],
+  );
+  const [open, setOpen] = useState<SectionId | null>(() => readSection());
+  const valid = open && sections.some((s) => s.id === open) ? open : null;
+  const desktopSel = valid ?? 'profile';
+  const wide = useBreakpoint('lg');
+  useEffect(() => writeSection(open), [open]);
 
-  const apply = (s0: AISettings, label: string, deidentify = deid) => {
-    const s = { ...s0, deidentify } as AISettings;
-    if (s.onDevice) s.onDevice = { ...s.onDevice, deidentify };
-    const e = configure(s);
-    if (e) {
-      setErr(e);
-      return;
-    }
-    setErr('');
-    persist(s);
-    toast(`AI set to: ${label}`);
-  };
-
-  const choose = (c: Card) => {
-    setMode(c.id);
-    setErr('');
-    if (c.id === 'own_key' || c.id === 'on_device') return; // these need the form below
-    apply({ mode: c.id }, c.title);
-  };
-
-  const exportData = async () => {
-    const data = JSON.stringify({ app: 'gaskin', schema: SCHEMA, exportedAt: new Date().toISOString(), state }, null, 2);
-    const r = await saveFile(`gaskin-backup-${state.clock.slice(0, 10)}.json`, data, 'application/json');
-    toast(r === 'declined' ? 'Export cancelled.' : 'Backup ready to save.');
-  };
-
-  const importData = async (f: File) => {
-    try {
-      const text = await f.text();
-      const parsed = JSON.parse(text) as { app?: string; state?: AppState };
-      const st = parsed.state;
-      if (parsed.app !== 'gaskin' || !st || !Array.isArray(st.mothers)) throw new Error('not a Gaskin file');
-      dispatch({ type: 'import', state: { ...st, schema: SCHEMA } });
-      toast(`Imported ${st.mothers.length} mothers.`);
-    } catch {
-      toast('That file is not a Gaskin backup. Nothing was changed.');
+  const body = (id: SectionId) => {
+    switch (id) {
+      case 'profile':
+        return <ProfileSection />;
+      case 'workers':
+        return <WorkersSection />;
+      case 'appearance':
+        return <AppearanceSection />;
+      case 'language':
+        return <LanguageRegionSection />;
+      case 'visits':
+        return <VisitsSection />;
+      case 'notifications':
+        return <NotificationsSection />;
+      case 'messaging':
+        return <MessagingSection />;
+      case 'printing':
+        return <PrintingSection />;
+      case 'ai':
+        return <AISection />;
+      case 'privacy':
+        return <PrivacySection />;
+      case 'storage':
+        return <StorageSection />;
+      case 'setup':
+        return <SetupAgainSection />;
+      case 'legal':
+        return <LegalSection onOpenAbout={() => go({ name: 'about' })} />;
     }
   };
+  const groups = [...new Set(sections.map((s) => s.group))];
 
   return (
-    <div className="page">
-      <header className="today-head">
-        <h1 className="t-display">Settings</h1>
-        <p className="lede">Many midwives cannot reach or pay for AI. Gaskin works fully without it, accepts AI from anywhere, and removes personal details before anything leaves the phone.</p>
-      </header>
-
-      <LanguagesSection />
-
-      <section className="section">
-        <div className="section-head">
-          <h2 className="t-h2">AI</h2>
-          <AIBadge />
-        </div>
-        {status.lastError ? <p className="small muted">{status.lastError}</p> : null}
-        <div className="modes">
-          {list.map((c) => (
-            <button key={c.id} className="mode" aria-pressed={mode === c.id} onClick={() => choose(c)} data-mode={c.id}>
-              {mode === c.id ? <ICheckCircle className="on" width={20} height={20} style={{ color: 'var(--green)' }} /> : null}
-              <h3>{c.title}</h3>
-              <p className="small soft">{c.blurb}</p>
-              <dl>
-                <div>
-                  <dt>Cost</dt>
-                  <dd>{c.cost}</dd>
-                </div>
-                <div>
-                  <dt>Needs</dt>
-                  <dd>{c.needs}</dd>
-                </div>
-                <div>
-                  <dt>Privacy</dt>
-                  <dd>{c.privacy}</dd>
-                </div>
-              </dl>
+    <div className="mx-auto w-full max-w-[1280px]" data-testid="settings">
+      {/* Phone: grouped list, or one section with Back */}
+      {!wide ? (
+      <div>
+        {valid ? (
+          <div className="grid gap-4">
+            <button type="button" onClick={() => setOpen(null)} className="-ml-2 inline-flex h-11 w-max cursor-pointer items-center gap-1.5 rounded-lg px-2 text-md font-semibold text-secondary outline-focus-ring hover:bg-primary_hover focus-visible:outline-2" data-testid="settings-back">
+              <ArrowLeft aria-hidden="true" className="size-5" />
+              Settings
             </button>
+            {body(valid)}
+          </div>
+        ) : (
+          <div className="grid gap-6">
+            <h1 className="text-display-xs font-semibold text-primary">Settings</h1>
+            {groups.map((g) => (
+              <section key={g} aria-label={g}>
+                <h2 className="mb-2 px-1 text-sm font-semibold text-tertiary">{g}</h2>
+                <ul className="divide-y divide-border-secondary overflow-hidden rounded-2xl bg-primary ring-1 ring-secondary ring-inset">
+                  {sections
+                    .filter((s) => s.group === g)
+                    .map((s) => (
+                      <li key={s.id}>
+                        <button type="button" onClick={() => (setOpen(s.id), window.scrollTo({ top: 0 }))} data-section={s.id} className="flex min-h-14 w-full cursor-pointer items-center gap-3 px-4 py-3 text-left outline-focus-ring hover:bg-primary_hover focus-visible:outline-2 focus-visible:-outline-offset-2">
+                          <span className="grid size-9 shrink-0 place-items-center rounded-lg bg-secondary text-fg-secondary">
+                            <s.icon aria-hidden="true" className="size-5" />
+                          </span>
+                          <span className="min-w-0 flex-1">
+                            <span className="block text-md font-medium text-primary">{s.label}</span>
+                            <span className="block truncate text-sm text-tertiary">{s.hint}</span>
+                          </span>
+                          <svg aria-hidden="true" viewBox="0 0 20 20" className="size-5 shrink-0 text-fg-quaternary">
+                            <path d="M7.5 5l5 5-5 5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+                          </svg>
+                        </button>
+                      </li>
+                    ))}
+                </ul>
+              </section>
+            ))}
+          </div>
+        )}
+      </div>
+
+      ) : (
+      /* Desktop: sub-navigation and the open section */
+      <div className="grid grid-cols-[240px_minmax(0,1fr)] gap-10">
+        <nav aria-label="Settings" className="sticky top-24 self-start">
+          <h1 className="mb-6 text-display-sm font-semibold text-primary">Settings</h1>
+          {groups.map((g) => (
+            <div key={g} className="mb-5">
+              <p className="mb-1 px-3 text-xs font-semibold tracking-wide text-quaternary uppercase">{g}</p>
+              <ul className="grid gap-0.5">
+                {sections
+                  .filter((s) => s.group === g)
+                  .map((s) => {
+                    const on = desktopSel === s.id;
+                    return (
+                      <li key={s.id}>
+                        <button
+                          type="button"
+                          onClick={() => setOpen(s.id)}
+                          aria-current={on ? 'page' : undefined}
+                          data-subnav={s.id}
+                          className={cx('flex h-10 w-full cursor-pointer items-center gap-3 rounded-lg px-3 text-left text-sm font-semibold outline-focus-ring focus-visible:outline-2', on ? 'bg-active text-primary' : 'text-secondary hover:bg-primary_hover')}
+                        >
+                          <s.icon aria-hidden="true" className={cx('size-5 shrink-0', on ? 'text-fg-brand-primary' : 'text-fg-quaternary')} />
+                          <span className="truncate">{s.label}</span>
+                        </button>
+                      </li>
+                    );
+                  })}
+              </ul>
+            </div>
           ))}
-        </div>
-
-        {mode === 'own_key' ? (
-          <form
-            className="panel section"
-            onSubmit={(e) => {
-              e.preventDefault();
-              apply({ mode: 'own_key', ownKey: { ...own, baseUrl: own.baseUrl || undefined } }, 'Your own API key');
-            }}
-          >
-            <h3 className="t-h3">Your own API key</h3>
-            {ownPresets.length ? (
-              <div className="chips">
-                {ownPresets.map((p) => (
-                  <button
-                    type="button"
-                    key={p.label}
-                    className="filter-chip"
-                    aria-pressed={own.model === p.model && own.kind === p.kind}
-                    onClick={() => setOwn({ ...own, kind: p.kind as typeof own.kind, baseUrl: p.baseUrl ?? '', model: p.model })}
-                  >
-                    {p.label}
-                  </button>
-                ))}
-              </div>
-            ) : null}
-            <div className="grid2">
-              <label className="field">
-                <span>Service type</span>
-                <select className="select" id="byok-kind" value={own.kind} onChange={(e) => setOwn({ ...own, kind: e.target.value as typeof own.kind })}>
-                  <option value="openai_compatible">OpenAI-compatible</option>
-                  <option value="anthropic">Claude API</option>
-                  <option value="gemini">Google Gemini</option>
-                </select>
-              </label>
-              <label className="field">
-                <span>Web address (base URL)</span>
-                <input className="input" id="byok-url" value={own.baseUrl} onChange={(e) => setOwn({ ...own, baseUrl: e.target.value })} placeholder="https://api.example.com/v1" />
-              </label>
-              <label className="field">
-                <span>Model</span>
-                <input className="input" id="byok-model" value={own.model} onChange={(e) => setOwn({ ...own, model: e.target.value })} />
-              </label>
-              <label className="field">
-                <span>Key</span>
-                <input className="input" id="byok-key" type="password" autoComplete="off" value={own.apiKey} onChange={(e) => setOwn({ ...own, apiKey: e.target.value })} />
-              </label>
-            </div>
-            <p className="small muted">The key is stored only on this device and is never included in backups.</p>
-            {err ? <p className="note amber">{err}</p> : null}
-            <div>
-              <button className="btn primary small" type="submit">
-                Save and use
-              </button>
-            </div>
-          </form>
-        ) : null}
-
-        {mode === 'on_device' ? (
-          <form
-            className="panel section"
-            onSubmit={(e) => {
-              e.preventDefault();
-              apply({ mode: 'on_device', onDevice: { kind: dev.kind, model: dev.model, baseUrl: dev.kind === 'local_server' ? dev.baseUrl : undefined } }, 'On this device');
-            }}
-          >
-            <h3 className="t-h3">On this device or a facility hub</h3>
-            {devPresets.length ? (
-              <div className="chips">
-                {devPresets.map((p) => (
-                  <button
-                    type="button"
-                    key={p.label}
-                    className="filter-chip"
-                    aria-pressed={dev.model === p.model}
-                    onClick={() => setDev({ kind: p.kind as typeof dev.kind, baseUrl: p.baseUrl ?? dev.baseUrl, model: p.model })}
-                  >
-                    {p.label}
-                  </button>
-                ))}
-              </div>
-            ) : null}
-            <div className="grid2">
-              <label className="field">
-                <span>Where it runs</span>
-                <select className="select" id="local-kind" value={dev.kind} onChange={(e) => setDev({ ...dev, kind: e.target.value as typeof dev.kind })}>
-                  <option value="local_server">A local server (Ollama, LM Studio)</option>
-                  <option value="in_browser">Inside this browser</option>
-                </select>
-              </label>
-              {dev.kind === 'local_server' ? (
-                <label className="field">
-                  <span>Server address</span>
-                  <input className="input" id="local-url" value={dev.baseUrl} onChange={(e) => setDev({ ...dev, baseUrl: e.target.value })} />
-                </label>
-              ) : null}
-              <label className="field">
-                <span>Model</span>
-                <input className="input" id="local-model" value={dev.model} onChange={(e) => setDev({ ...dev, model: e.target.value })} />
-              </label>
-            </div>
-            {err ? <p className="note amber">{err}</p> : null}
-            <div>
-              <button className="btn primary small" type="submit">
-                Save and use
-              </button>
-            </div>
-          </form>
-        ) : null}
-
-        <div className="panel section" style={{ gap: 10 }}>
-          <label className="switch">
-            <input
-              type="checkbox"
-              id="deidentify"
-              checked={deid}
-              onChange={(e) => {
-                if (e.target.checked) {
-                  setDeid(true);
-                  setConfirmOff(false);
-                  const cur = getAISettings();
-                  apply(cur, 'names removed before sending', true);
-                } else setConfirmOff(true);
-              }}
-            />
-            <strong>Remove names and personal details before sending to AI</strong>
-          </label>
-          <p className="small soft">On by default. Names, phone numbers, places and dates are replaced with placeholders, and put back on this phone when the answer arrives.</p>
-          {confirmOff ? (
-            <div className="note amber" style={{ display: 'grid', gap: 10 }}>
-              <span>
-                Turning this off sends her real name, community and dates to the AI service. Only do this for an AI on this device or your own facility server, and only with her consent.
-              </span>
-              <span className="btn-row">
-                <button
-                  className="btn small danger"
-                  onClick={() => {
-                    setDeid(false);
-                    setConfirmOff(false);
-                    apply(getAISettings(), 'personal details included', false);
-                  }}
-                >
-                  Turn off and send real details
-                </button>
-                <button className="btn small ghost" onClick={() => setConfirmOff(false)}>
-                  Keep details private
-                </button>
-              </span>
-            </div>
-          ) : null}
-        </div>
-
-        {mode === 'any_app' ? (
-          <p className="note">When you ask for AI help, Gaskin shows a short request with a Copy button. Paste it into any AI app, then paste the answer back. Gaskin checks the answer before you use it.</p>
-        ) : null}
-
-      </section>
-
-      <AssistantSection />
-
-      <StorageSection />
-
-      <section className="section">
-        <h2 className="t-h2">Your data</h2>
-        <p className="soft" style={{ maxWidth: '66ch' }}>
-          Save a backup of everything on this device, or load one from another phone or the connector. API keys are never included.
-        </p>
-        <div className="btn-row">
-          <button className="btn" onClick={exportData}>
-            <IDownload /> Export backup
-          </button>
-          <button className="btn" onClick={() => fileRef.current?.click()}>
-            <IUpload /> Import backup
-          </button>
-          <input
-            ref={fileRef}
-            type="file"
-            accept="application/json,.json"
-            hidden
-            id="import-file"
-            onChange={(e) => {
-              const f = e.target.files?.[0];
-              if (f) importData(f);
-              e.target.value = '';
-            }}
-          />
-        </div>
-      </section>
-      <SetupSection />
+        </nav>
+        <div className="max-w-3xl min-w-0 pb-16">{body(desktopSel)}</div>
+      </div>
+      )}
     </div>
   );
 }

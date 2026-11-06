@@ -6,6 +6,8 @@
 import { registerLanguagePack, hasLanguagePack } from '../messaging';
 import { allPacks, registerTemplates, renderMotherText, type PackCode } from '../i18n';
 import { VISIT_TEXT } from '../visits/text';
+import { PLAN_TEXT } from '../clinical';
+import { LEGAL_TEXT } from '../legal';
 import type { LanguageCode, PlanItem } from '../types';
 
 let done = false;
@@ -13,11 +15,17 @@ let done = false;
 export function registerMessagePacks(): void {
   if (done) return;
   done = true;
-  // Visit lines (and visit-referral alerts) are translated by the packs like plan lines.
-  try {
-    registerTemplates('visits', VISIT_TEXT);
-  } catch {
-    /* already registered */
+  // Visit, plan and legal lines are translated by the packs like the core mother text.
+  for (const [source, table] of [
+    ['visits', VISIT_TEXT],
+    ['plan', PLAN_TEXT],
+    ['legal', LEGAL_TEXT],
+  ] as const) {
+    try {
+      registerTemplates(source, table);
+    } catch {
+      /* already registered */
+    }
   }
   for (const p of allPacks()) {
     const code = p.code as PackCode;

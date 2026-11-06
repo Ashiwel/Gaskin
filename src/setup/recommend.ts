@@ -12,8 +12,12 @@
 import type { Channel, CountryCode, LanguageCode } from '../types';
 import type { AISettings } from '../ai';
 import { getLocationProfile, type LocationProfile } from '../location';
+import { countryName as geoCountryName, findCountry, findRegion, getCountry } from '../geo/places';
+import { describeLanguage, languagesFor, type LanguageChoice } from '../geo/languages';
 import type {
   AssistantTarget,
+  PersonalStage,
+  SetupMode,
   Printer,
   SetupAIMode,
   SetupAnswers,
@@ -23,10 +27,10 @@ import type {
   WorkerLanguage,
 } from './types';
 
-const COUNTRY_NAMES: Record<CountryCode, string> = { NG: 'Nigeria', KE: 'Kenya', GH: 'Ghana' };
-
 /** Languages Gaskin can show its own screens in (others fall back to English) */
 const UI_LANGUAGES = new Set<string>(['en', 'pcm', 'ha', 'yo', 'ig', 'sw', 'tw', 'fr']);
+
+const LAUNCH = new Set(['NG', 'KE', 'GH']);
 
 /** Where most mothers have smartphones (DHS/KDHS: Lagos 72% internet use, Nairobi 72% smartphones, Greater Accra 88% literacy) */
 const WHATSAPP_FIRST_REGIONS = new Set(['Lagos', 'Nairobi', 'Greater Accra']);
@@ -45,9 +49,13 @@ const CHINA = /china|中国|prc|beijing|shanghai|shenzhen|guangzhou/i;
 // ---------------------------------------------------------------------------
 
 interface Facts {
+  mode: SetupMode;
   country: CountryCode | 'other';
+  /** ISO 3166-1 alpha-2 for any country, '' when unknown */
+  countryCode: string;
   launch: boolean;
   countryName: string;
+  regionCode?: string;
   inChina: boolean;
   region: string;
   role: string;
@@ -74,21 +82,43 @@ interface Facts {
   profile: LocationProfile | null;
 }
 
+/** The ISO code for the answers: countryCode, a launch country, or the typed name resolved through src/geo */
+export function resolveCountryCode(a: Pick<SetupAnswers, 'country' | 'countryCode' | 'countryOther'>): string {
+  if (a.countryCode && getCountry(a.countryCode)) return a.countryCode.toUpperCase();
+  if (a.country && LAUNCH.has(a.country)) return a.country;
+  if (a.country === 'other' && a.countryOther?.trim()) return findCountry(a.countryOther)?.code ?? '';
+  return '';
+}
+
+export function setupMode(a: Pick<SetupAnswers, 'audience' | 'role'>): SetupMode {
+  if (a.audience === 'personal' || (a.role as string) === 'personal') return 'personal';
+  if (a.audience === 'supervisor' || a.role === 'supervisor') return 'supervisor';
+  return 'worker';
+}
+
 function facts(a: SetupAnswers): Facts {
-  const country: Facts['country'] = a.country === 'NG' || a.country === 'KE' || a.country === 'GH' ? a.country : 'other';
+  const countryCode = resolveCountryCode(a);
+  const country: Facts['country'] = LAUNCH.has(countryCode) ? (countryCode as CountryCode) : 'other';
   const launch = country !== 'other';
   const devices = new Set(a.devices ?? []);
   const smartphone = ['android_phone', 'work_phone', 'iphone', 'tablet'].some((d) => devices.has(d as never));
   const ownLaptop = devices.has('laptop');
   const sharedComputer = devices.has('shared_computer');
   const internet = a.internet === 'none' || a.internet === 'fourg' || a.internet === 'wifi' ? a.internet : 'patchy';
-  const region = a.region && a.region !== 'not_sure' ? a.region : '';
+  const typedRegion = a.region && a.region !== 'not_sure' ? a.region.trim() : '';
+  const reg = findRegion(countryCode, a.regionCode) ?? findRegion(countryCode, typedRegion);
+  const region = reg?.name ?? typedRegion;
   const aiApps = new Set((a.aiApps ?? []).filter((x) => x !== 'none'));
+  // A curated profile keeps its own region name (e.g. 'Cross River'); every other country gets a generic profile, never Nigeria's.
+  const profile = countryCode ? getLocationProfile(countryCode, typedRegion || region) : null;
   return {
+    mode: setupMode(a),
     country,
+    countryCode,
     launch,
-    countryName: launch ? COUNTRY_NAMES[country as CountryCode] : (a.countryOther?.trim() || 'your country'),
-    inChina: country === 'other' && CHINA.test(a.countryOther ?? ''),
+    countryName: countryCode ? geoCountryName(countryCode) : a.countryOther?.trim() || 'your country',
+    regionCode: reg?.code,
+    inChina: countryCode === 'CN' || (country === 'other' && CHINA.test(a.countryOther ?? '')),
     region,
     role: a.role && a.role !== 'not_sure' ? a.role : 'other',
     community: COMMUNITY_ROLES.has(a.role ?? ''),
@@ -111,7 +141,7 @@ function facts(a: SetupAnswers): Facts {
     caseload: a.caseload,
     supported: a.setupBy === 'supervisor' || a.setupBy === 'programme',
     comfort: typeof a.techComfort === 'number' ? a.techComfort : 2,
-    profile: launch ? getLocationProfile(country as CountryCode, region) : null,
+    profile,
   };
 }
 
@@ -216,18 +246,32 @@ function chooseLanguages(a: SetupAnswers, f: Facts): SetupPlan['languages'] {
   if (worker === 'zh') notes.push('Gaskin\'s screens are not in Chinese yet, so they show in English. Your AI can explain any plan in Chinese.');
   else if (worker === 'other') notes.push('Gaskin\'s screens show in English until a pack for your language exists. You can help write one.');
 
-  // Mothers' languages: what she picked; if "Not sure", the three most spoken in her area.
-  let mothers = (a.mothersLanguages ?? []).filter((l): l is LanguageCode => l !== 'not_sure');
-  if (!mothers.length) {
-    mothers = f.profile ? f.profile.languages.slice(0, 3) : ['en'];
-    if (f.launch) notes.push(`We picked the most common languages in ${f.profile?.region || f.countryName}. Change them any time.`);
+  // Mothers' languages: what she picked (pack codes or any BCP-47 tag); if "Not sure", the three most
+  // likely in her area from src/geo (never another country's), skipping Pidgin, which is never a default.
+  const place = { country: f.countryCode, region: f.regionCode ?? f.region, area: a.district };
+  const picked = (a.mothersLanguages ?? []).filter((l) => l !== 'not_sure').map(String);
+  let chosen: LanguageChoice[];
+  if (picked.length) {
+    chosen = picked.map((t) => describeLanguage(t));
+  } else {
+    const suggested = f.countryCode ? languagesFor(place) : [describeLanguage('en')];
+    chosen = suggested.filter((l) => l.tag !== 'pcm').slice(0, 3);
+    if (f.countryCode) notes.push(`We picked the most common languages in ${f.region || f.countryName}. Change them any time.`);
   }
-  if (f.profile?.otherLanguages.length && f.launch) {
-    notes.push(`Also spoken here, with no Gaskin pack yet: ${f.profile.otherLanguages.join(', ')}. Read messages aloud in these.`);
+  // Pack codes, in order, for languages with a pack, even an empty one (LanguageCode keeps its meaning for packs)
+  const mothers = [...new Set(chosen.filter((l) => l.packCode).map((l) => l.packCode as string))] as LanguageCode[];
+  if (!mothers.length) mothers.push('en');
+  // "Coming soon" (founder's wording): no pack, or a pack with no translations yet
+  const noPack = chosen.filter((l) => !l.packCode || l.pack === 'none');
+  if (noPack.length) notes.push(`Coming soon: ${noPack.map((l) => l.nativeName === l.name ? l.name : `${l.name} (${l.nativeName})`).join(', ')}. Messages show in plain English until a pack is ready. Read them aloud in her language.`);
+  const others = f.profile?.otherLanguages.filter((n) => !chosen.some((c) => c.name === n)) ?? [];
+  if (others.length && f.profile?.origin === 'curated') {
+    notes.push(`Also spoken here, with no Gaskin pack yet: ${others.join(', ')}. Read messages aloud in these.`);
   }
   const install = [ui, ...mothers].filter((l, i, arr) => l !== 'en' && arr.indexOf(l) === i) as Array<LanguageCode | 'fr'>;
   if (install.length) notes.push('Language packs marked "draft" must be checked by a speaker before you send them to mothers.');
-  return { ui, worker, mothers, install, notes };
+  const motherLanguages = chosen.map((l) => ({ tag: l.tag, name: l.name, nativeName: l.nativeName, ...(l.packCode ? { packCode: l.packCode } : {}), pack: l.pack }));
+  return { ui, worker, mothers, motherLanguages, install, notes };
 }
 
 // ---------------------------------------------------------------------------
@@ -327,7 +371,7 @@ function chooseChannels(f: Facts, a: SetupAnswers): SetupPlan['channels'] {
   const out: SetupPlan['channels'] = [];
   const region = f.profile?.region ?? '';
   const waFirst = WHATSAPP_FIRST_REGIONS.has(region) || (f.country === 'other' && f.online);
-  const voiceFirst = VOICE_FIRST_REGIONS.has(region) || (a.mothersLanguages ?? []).some((l) => l === 'ff' || l === 'ar' || l === 'dag');
+  const voiceFirst = VOICE_FIRST_REGIONS.has(region) || (a.mothersLanguages ?? []).some((l) => l === 'ff' || l === 'ar' || l === 'dag' || l === 'fuv' || l === 'shu');
 
   if (waFirst) {
     out.push({ channel: 'whatsapp', primary: true, reason: f.country === 'other' ? 'Good internet: send messages and picture cards on WhatsApp, or copy them into the app mothers use.' : `Most mothers in ${region} have smartphones and WhatsApp, which carries pictures and voice notes.` });
@@ -414,8 +458,9 @@ function extraNotes(f: Facts, plan: Omit<SetupPlan, 'firstTenMinutes' | 'notes'>
   if (f.power === 'rarely') n.push('Power is scarce: Gaskin works offline and uses little battery. Charge from solar or a power bank, and back up every day.');
   if (f.data === 'tiny' && f.internet !== 'none') n.push('Data is tight: Gaskin uses no data except for AI and WhatsApp. SMS costs the programme, not you.');
   if (f.profile?.malariaRisk === 'high') n.push(`${f.profile.region} has a lot of malaria, so plans include IPTp and bed nets.`);
-  if (f.profile && !f.profile.malariaEndemic) n.push(`${f.profile.region} is outside Kenya's IPTp zones, so plans do not include IPTp. Test any fever.`);
-  if (f.country === 'other') n.push(`Gaskin's medical rules follow WHO guidance and Nigerian, Kenyan and Ghanaian schedules. Check vaccines and medicines against ${f.countryName}'s own guidelines.`);
+  if (f.profile && f.launch && !f.profile.malariaEndemic) n.push(`${f.profile.region} is outside Kenya's IPTp zones, so plans do not include IPTp. Test any fever.`);
+  if (f.profile && !f.launch) n.push(f.profile.malariaNote);
+  if (f.country === 'other') n.push(`Gaskin's medical rules follow WHO guidance. Check vaccines and medicines against ${f.countryName}'s own guidelines. Local foods and traditional practices are not listed for ${f.countryName} yet.`);
   if (f.inChina) n.push('WeChat is not built in. Copy messages into WeChat, or print them.');
   if (f.supported) n.push('Your supervisor can see this setup and change it with you.');
   if (plan.ai.mode !== 'none') n.push('AI never decides danger signs or medicines. Gaskin\'s checked rules do that, and Gaskin checks every AI answer.');
@@ -436,11 +481,15 @@ export function recommendSetup(answers: SetupAnswers, env: SetupEnvironment = {}
   const base: Omit<SetupPlan, 'firstTenMinutes' | 'notes'> = {
     version: 1,
     createdAt: now,
+    mode: f.mode,
     country: f.country,
+    countryCode: f.countryCode,
     countryName: f.countryName,
-    region: f.profile?.region ?? f.region,
+    region: f.profile?.origin === 'curated' ? f.profile.region : f.region,
+    ...(f.regionCode ? { regionCode: f.regionCode } : {}),
     district: answers.district?.trim() || undefined,
-    locationProfileId: f.profile?.id ?? null,
+    // Null outside the launch countries (contract): those use the generic WHO-default profile from getLocationProfile
+    locationProfileId: f.launch ? (f.profile?.id ?? null) : null,
     run,
     storage,
     languages,
@@ -449,7 +498,57 @@ export function recommendSetup(answers: SetupAnswers, env: SetupEnvironment = {}
     printing,
     sync,
   };
+  if (f.mode === 'personal') return personalPlan(answers, f, base);
   return { ...base, firstTenMinutes: firstSteps(f, base), notes: extraNotes(f, base) };
+}
+
+// ---------------------------------------------------------------------------
+// Personal use: a pregnant woman, a mother or a family member using Gaskin for herself
+// ---------------------------------------------------------------------------
+
+/**
+ * Personal mode: her own phone, her language, AI off unless she later turns it on, and every
+ * screen nudging her to register at a clinic and see a health worker. No caseload, no printing
+ * routine, no programme sync. Nearest facilities come from the location profile (curated areas);
+ * elsewhere the plan says to ask at the nearest health centre.
+ */
+function personalPlan(a: SetupAnswers, f: Facts, base: Omit<SetupPlan, 'firstTenMinutes' | 'notes'>): SetupPlan {
+  const stage: PersonalStage[] = a.personalStage?.length ? a.personalStage : ['other'];
+  const registered = a.clinicRegistered === 'yes' || a.clinicRegistered === 'no' ? a.clinicRegistered : 'not_sure';
+  const facilities = (f.profile?.referralFacilities ?? []).slice(0, 3).map((x) => ({ name: x.name, town: x.town, distanceKm: x.distanceKm }));
+  const nudges: string[] = [];
+  if (registered !== 'yes') {
+    if (stage.includes('pregnant')) nudges.push('Register for antenatal care at a health centre as soon as you can, ideally before 12 weeks. WHO advises at least 8 check-ups in pregnancy.');
+    if (stage.includes('child_under_2')) nudges.push('Take your baby to a health centre for vaccines and weighing. Bring the child health card every time.');
+    if (!stage.includes('pregnant') && !stage.includes('child_under_2')) nudges.push('Visit a health centre and ask to see a midwife or nurse. They can check your health and help you plan.');
+  } else {
+    nudges.push('Keep going to every check-up. Show your Gaskin plan to your midwife or nurse.');
+  }
+  nudges.push(facilities.length ? `Nearest hospitals Gaskin knows for ${f.profile?.region}: ${facilities.map((x) => x.name).join('; ')}.` : 'Ask at your nearest health centre which hospital to go to in an emergency, and save its number.');
+  nudges.push('Gaskin is not a doctor. If you have bleeding, a bad headache, blurred vision, fits, fever, or your baby moves less, go to a health facility now.');
+  const phone = a.phone === 'basic_phone' || a.phone === 'shared_phone' ? a.phone : 'smartphone';
+  const plan: Omit<SetupPlan, 'firstTenMinutes' | 'notes'> = {
+    ...base,
+    mode: 'personal',
+    run: {
+      where: 'phone_app',
+      label: phone === 'smartphone' ? 'On your phone, as an app' : 'On a phone with a browser',
+      reason: phone === 'smartphone' ? 'Gaskin installs like an app and works without internet. Your records stay on your phone.' : 'Gaskin needs a phone with a web browser. On a basic phone, ask your clinic about SMS reminders instead.',
+    },
+    storage: { mode: 'browser', label: 'On this phone only', reason: 'Your records stay on this phone. Nothing is sent anywhere unless you choose to.', backupEveryDays: 7 },
+    ai: { mode: 'none', settings: { mode: 'none' }, label: 'No AI', reason: 'Gaskin uses its checked advice. You can switch on smart help later in Settings.', deidentify: true, fallback: 'none' },
+    channels: [{ channel: 'whatsapp', primary: true, reason: 'Reminders and picture cards on your own phone.' }, { channel: 'sms', primary: false, reason: 'Works on every phone.' }],
+    printing: { where: 'none', routine: 'No printing needed. Show your plan on your phone at the clinic.' },
+    sync: { method: 'device_only', routine: 'Everything stays on this phone. Save a backup file now and then from Settings.' },
+    personal: { stage, clinicRegistered: registered, nudges, nearestFacilities: facilities },
+  };
+  const first = [
+    stage.includes('pregnant') ? 'Add the first day of your last period, or your due date.' : stage.includes('child_under_2') ? 'Add your baby’s birthday.' : 'Tell Gaskin about you and your family.',
+    registered === 'yes' ? 'Add your clinic’s name and your next check-up date.' : 'Find a health centre near you and book your first check-up.',
+    'Read your plan for this week.',
+    'Save the emergency number in your phone.',
+  ];
+  return { ...plan, firstTenMinutes: first, notes: f.country === 'other' ? [`Gaskin's advice follows WHO guidance. Your clinic follows ${f.countryName}'s own guidelines: when they differ, follow your clinic.`] : [] };
 }
 
 /** Channels in plan order, primary first: handy for the messaging composer */

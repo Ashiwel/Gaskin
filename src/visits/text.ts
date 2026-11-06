@@ -6,7 +6,7 @@
  * Placeholders: {name} the baby's name; {date} a short date; {vaccines} plain vaccine names;
  * {food} an enriching food; {label} a visit name.
  */
-import { MOTHER_TEXT } from '../clinical';
+import { MOTHER_TEXT, PLAN_TEXT } from '../clinical';
 import { milestoneTexts } from './milestones';
 
 export const VISIT_TEXT: Record<string, string> = {
@@ -70,14 +70,33 @@ export const VISIT_TEXT: Record<string, string> = {
   'vt.next_visit.simple': 'Next visit: {date}.',
   'vt.refer_today': 'Please go to {place} today. We will tell them you are coming.',
   'vt.refer_now': 'Please go to {place} now. Do not wait.',
+  'vt.refer_within': 'Please go to {place} {when}. It is not an emergency, but do not miss it.',
+
+  // ---------- Follow-ups ----------
+  'vt.fu.iron_food': 'Take the blood tablet with food at night. Black stool is normal.',
+  'vt.fu.reminder': 'Keep the tablets where you see them every day. Ask someone to remind you.',
+  'vt.fu.free': 'This is free at public clinics. Ask at your nearest clinic.',
+  'vt.fu.why_needed': 'This protects you and your baby, even when you feel well.',
+  'vt.fu.net_hang': 'Hang the net over your sleeping place. Tuck it under the mat every night.',
+  'vt.fu.transport': 'Plan your ride now. Save a little money each week for transport.',
+  'vt.fu.anc_come': 'Please come to every clinic visit, even when you feel well.',
 
   // Milestone lines (one per milestone)
   ...milestoneTexts(),
 };
 
+/** "within 2 weeks", "this week", "this month" from a worker's referral instruction. */
+export function referralWhen(todo: string | undefined): string | undefined {
+  if (!todo) return undefined;
+  const m = todo.match(/within (\d+) (days?|weeks?|months?)/i);
+  if (m) return `within ${m[1]} ${m[2].toLowerCase()}`;
+  const t = todo.match(/this (week|month)/i);
+  return t ? `this ${t[1].toLowerCase()}` : undefined;
+}
+
 /** Look up a template in VISIT_TEXT, then MOTHER_TEXT. */
 export function visitTemplate(key: string): string | undefined {
-  return VISIT_TEXT[key] ?? MOTHER_TEXT[key];
+  return VISIT_TEXT[key] ?? MOTHER_TEXT[key] ?? PLAN_TEXT[key];
 }
 
 /** Fill {placeholders} in English. Throws on an unknown key so typos fail tests, not users. */

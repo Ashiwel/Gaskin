@@ -36,7 +36,7 @@ describe('seed', () => {
     expect(seed.mothers.slice(0, 5).map((m) => m.id)).toEqual(Object.values(DEMO_STARS));
     const by = (c: string) => seed.mothers.filter((m) => m.country === c).length;
     expect(by('NG')).toBeGreaterThanOrEqual(22);
-    expect(by('KE')).toBe(6);
+    expect(by('KE')).toBe(7);
     expect(by('GH')).toBe(6);
     const stages = seed.mothers.map((m) => deriveState(m, seed.clock).stage);
     for (const st of ['preconception', 'pregnancy', 'postpartum', 'infant']) expect(stages).toContain(st);

@@ -53,11 +53,14 @@ export class MessagingService {
     if (c.africastalking) {
       const at = c.africastalking;
       const voiceScript = (sessionId: string) => this.voiceScript(sessionId);
-      this.register(new AfricasTalkingGateway({ ...at, fetch: opts.fetch, voiceScript }, 'sms'));
-      this.register(new AfricasTalkingGateway({ ...at, fetch: opts.fetch, voiceScript }, 'voice'));
+      const webhookToken = process.env.AT_WEBHOOK_TOKEN || undefined;
+      this.register(new AfricasTalkingGateway({ ...at, fetch: opts.fetch, voiceScript, webhookToken, requireAuth: live }, 'sms'));
+      this.register(new AfricasTalkingGateway({ ...at, fetch: opts.fetch, voiceScript, webhookToken, requireAuth: live }, 'voice'));
     }
-    if (c.termii) this.register(new TermiiGateway({ ...c.termii, webhookSecret: process.env.TERMII_WEBHOOK_SECRET, fetch: opts.fetch }));
-    if (c.whatsapp) this.register(new WhatsAppGateway({ ...c.whatsapp, fetch: opts.fetch }));
+    // In live mode an unauthenticated webhook could forge delivery receipts or a "danger sign" SMS from a mother,
+    // so every gateway refuses callbacks it cannot verify.
+    if (c.termii) this.register(new TermiiGateway({ ...c.termii, webhookSecret: process.env.TERMII_WEBHOOK_SECRET, requireAuth: live, fetch: opts.fetch }));
+    if (c.whatsapp) this.register(new WhatsAppGateway({ ...c.whatsapp, requireAuth: live, fetch: opts.fetch }));
     if (c.smtp) this.register(new SmtpGateway(c.smtp));
     for (const g of opts.gateways ?? []) this.register(g);
 

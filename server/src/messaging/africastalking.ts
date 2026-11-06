@@ -21,6 +21,7 @@
  * other languages that text-to-speech does not cover. The end-of-call
  * callback carries duration and cost.
  */
+import { timingSafeEqual } from 'node:crypto';
 import type { Channel } from '../../../src/types';
 import type { MessageStatus } from '../../../src/hosted/syncTypes';
 import {
@@ -31,6 +32,7 @@ import {
   type MessageGateway,
   type WebhookRequest,
   type WebhookResult,
+  WebhookAuthError,
   formParse,
   parseMoney,
 } from './gateway';
@@ -42,6 +44,13 @@ export interface AfricasTalkingOptions {
   voiceNumber?: string;
   sandbox: boolean;
   fetch?: FetchFn;
+  /**
+   * Africa's Talking does not sign its callbacks. Set AT_WEBHOOK_TOKEN and add ?token=<it> to every
+   * callback URL in the AT dashboard; requests without it are refused. In live mode it is required.
+   */
+  webhookToken?: string;
+  /** Refuse unauthenticated callbacks even when no token is configured (live mode) */
+  requireAuth?: boolean;
   /** Look up what to say when AT asks the voice callback (by call session id) */
   voiceScript?: (sessionId: string) => Promise<{ text: string; language: string; audioUrl?: string } | undefined>;
 }
@@ -157,6 +166,11 @@ export class AfricasTalkingGateway implements MessageGateway {
   }
 
   async handleWebhook(req: WebhookRequest): Promise<WebhookResult> {
+    const want = this.o.webhookToken;
+    if (want) {
+      const got = req.query.token ?? '';
+      if (got.length !== want.length || !timingSafeEqual(Buffer.from(got), Buffer.from(want))) throw new WebhookAuthError("Bad Africa's Talking callback token");
+    } else if (this.o.requireAuth) throw new WebhookAuthError("AT_WEBHOOK_TOKEN is not set, so Africa's Talking callbacks are refused in live mode");
     const f = req.contentType.includes('json') ? (JSON.parse(req.rawBody || '{}') as Record<string, string>) : formParse(req.rawBody);
     const at = new Date().toISOString();
     if (this.kind === 'voice') {

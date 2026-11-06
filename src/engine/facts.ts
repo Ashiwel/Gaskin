@@ -38,7 +38,23 @@ export interface Facts {
   children: Child[];
   youngest?: Child;
   youngestAgeDays?: number;
+  /** Children aged 0 to 1,000 days, oldest first (youngest last, same order as `children`) */
+  under1000: Child[];
+  /** Pregnant now and caring for a child under 1,000 days */
+  concurrent: boolean;
+  /** Days from the last birth before this pregnancy to its LMP */
+  interpregnancyDays?: number;
   bmi?: number;
+}
+
+/** A view of the facts with one child as "the" child, so single-child rules can run per child. */
+export function forChild(f: Facts, child: Child): Facts {
+  return { ...f, youngest: child, youngestAgeDays: daysBetween(child.dob, f.asOf) };
+}
+
+/** Is this child the youngest (the one `PatientState.infant` describes)? */
+export function isYoungest(f: Facts, child: Child): boolean {
+  return f.children[f.children.length - 1]?.id === child.id;
 }
 
 export function collectFacts(mother: Mother, asOf: string): Facts {
@@ -76,7 +92,17 @@ export function collectFacts(mother: Mother, asOf: string): Facts {
   const bmi =
     mother.heightCm && mother.prePregnancyWeightKg ? mother.prePregnancyWeightKg / Math.pow(mother.heightCm / 100, 2) : undefined;
 
+  const under1000 = children.filter((c) => {
+    const a = daysBetween(c.dob, day);
+    return a >= 0 && a <= 1000;
+  });
+  const pregnantNow = !!lmp && dayMs(lmp) <= cutoff && !(last && dayMs(last.birth.date) >= dayMs(lmp));
+  // The birth before this pregnancy: last recorded birth, or the youngest child's date of birth.
+  const prevBirthDate = pregnantNow ? (last?.birth.date ?? youngest?.dob) : undefined;
   return {
+    under1000,
+    concurrent: pregnantNow && under1000.length > 0,
+    interpregnancyDays: pregnantNow && prevBirthDate && lmp ? daysBetween(prevBirthDate, lmp) : undefined,
     mother,
     asOf: day,
     events,
@@ -155,6 +181,12 @@ export function growthFor(f: Facts, child: Child): GrowthEvent[] {
   return ofKind(f, 'growth').filter((g) => g.childId === child.id || (!g.childId && onlyChild));
 }
 
+/** Feeding events for one child (unlabelled events count for the youngest). */
+export function feedingFor(f: Facts, child: Child): FeedingEvent[] {
+  const youngest = isYoungest(f, child);
+  return ofKind(f, 'feeding').filter((e) => (e.childId ? e.childId === child.id : youngest));
+}
+
 export function vaccinesGiven(f: Facts, child: Child): string[] {
   const onlyChild = f.children.length === 1;
   const out: string[] = [];
@@ -181,10 +213,26 @@ export function recentSymptoms(f: Facts, days = 7): { mother: SymptomCode[]; bab
   return { mother: list.filter((s) => !s.startsWith('baby_')), baby: list.filter((s) => s.startsWith('baby_')), events: evs };
 }
 
-export function symptomSeverity(f: Facts, code: SymptomCode, days = 7): SymptomEvent['severity'] | undefined {
+/**
+ * Baby symptoms (baby_*) for one child in the last `days` days. An event with a childId belongs to
+ * that child; one without belongs to the youngest child (how single-child records were written).
+ */
+export function babySymptomsFor(f: Facts, child: Child, days = 7): SymptomCode[] {
+  const youngest = isYoungest(f, child);
+  const out = new Set<SymptomCode>();
+  for (const e of ofKind(f, 'symptom')) {
+    if (!isRecent(f, e, days)) continue;
+    if (e.childId ? e.childId !== child.id : !youngest) continue;
+    for (const s of e.symptoms) if (s.startsWith('baby_')) out.add(s);
+  }
+  return [...out];
+}
+
+export function symptomSeverity(f: Facts, code: SymptomCode, days = 7, childId?: string, youngest = true): SymptomEvent['severity'] | undefined {
   const order = { mild: 1, moderate: 2, severe: 3 } as const;
   let best: SymptomEvent['severity'];
   for (const e of ofKind(f, 'symptom')) {
+    if (childId && (e.childId ? e.childId !== childId : !youngest)) continue;
     if (!isRecent(f, e, days) || !e.symptoms.includes(code) || !e.severity) continue;
     if (!best || order[e.severity] > order[best]) best = e.severity;
   }

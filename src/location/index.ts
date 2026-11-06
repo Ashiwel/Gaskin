@@ -12,6 +12,9 @@
  */
 import type { CountryCode, LanguageCode } from '../types';
 import { COUNTRY_RULES, LOCAL_FOODS, TRADITIONAL_PRACTICES } from '../clinical';
+import { countryName as geoCountryName, findRegion as geoFindRegion, getCountry } from '../geo/places';
+import { languagesFor } from '../geo/languages';
+import { MALARIA_SOURCES, malariaDefault } from '../geo/malaria';
 import { LOCATION_PROFILES } from './profiles';
 import { LOCATION_SOURCES, src } from './sources';
 import type { LocationFood, LocationProfile, PlanLocation, ReferralFacility } from './types';
@@ -54,7 +57,8 @@ const COUNTRY_LANGS: Record<CountryCode, LanguageCode[]> = {
   GH: ['en', 'tw'],
 };
 
-export function listRegions(country: CountryCode): string[] {
+/** Regions with a curated profile (Nigeria, Kenya, Ghana). For every region of any country use src/geo listRegions. */
+export function listRegions(country: CountryCode | string): string[] {
   return LOCATION_PROFILES.filter((p) => p.country === country).map((p) => p.region);
 }
 
@@ -109,14 +113,62 @@ export function countryDefaultProfile(country: CountryCode, region: string): Loc
   };
 }
 
-/** Curated profile for a region, or a country default. Never throws. */
-export function getLocationProfile(country: CountryCode, region: string): LocationProfile {
-  return findCurated(country, region) ?? countryDefaultProfile(country, region);
+const isLaunch = (c: string): c is CountryCode => c === 'NG' || c === 'KE' || c === 'GH';
+
+/**
+ * A profile for a country (or region) with no curated data: no local food claims, no practices,
+ * no facilities; WHO defaults, and malaria from the WHO World Malaria Report country list.
+ * Languages come from src/geo (CLDR plus curated regions), mapped to Gaskin packs where they exist.
+ * Never borrows another country's foods, practices or languages.
+ */
+export function genericProfile(country: string, region = ''): LocationProfile {
+  const cc = (country || '').toUpperCase();
+  const reg = geoFindRegion(cc, region);
+  const langs = languagesFor(cc, region);
+  const malaria = malariaDefault(cc);
+  const name = geoCountryName(cc) || cc || 'your country';
+  return {
+    id: `${cc || 'XX'}-${norm(reg?.name ?? region) || 'generic'}`,
+    country: cc as CountryCode,
+    region: reg?.name ?? (region || name),
+    regionKind: 'region',
+    capital: '',
+    centroid: [0, 0],
+    languages: langs.filter((l) => l.packCode && l.pack !== 'none').map((l) => l.packCode as LanguageCode),
+    otherLanguages: langs.filter((l) => !l.packCode || l.pack === 'none').map((l) => l.name),
+    localFoods: [],
+    seasonality: 'No local food data for this area yet. Ask her which iron-rich and protein foods are cheap this month.',
+    prevalentPractices: [],
+    malariaEndemic: malaria.iptp,
+    malariaRisk: malaria.risk,
+    malariaNote: malaria.note,
+    referralFacilities: [],
+    connectivityNote: 'No local connectivity data yet.',
+    sources: MALARIA_SOURCES,
+    reviewedAt: '2026-11-06',
+    origin: 'generic',
+  };
+}
+
+/**
+ * Curated profile for a region; a country default for the launch countries (Nigeria, Kenya, Ghana);
+ * otherwise a generic WHO-default profile for that country. Never falls back to another country. Never throws.
+ */
+export function getLocationProfile(country: CountryCode | string, region: string): LocationProfile {
+  const cc = String(country ?? '').toUpperCase();
+  if (isLaunch(cc)) return findCurated(cc, region ?? '') ?? countryDefaultProfile(cc, region ?? '');
+  return genericProfile(cc, region ?? '');
 }
 
 /** Whether Gaskin has a hand-checked profile for this region */
-export function hasCuratedProfile(country: CountryCode, region: string): boolean {
-  return Boolean(findCurated(country, region));
+export function hasCuratedProfile(country: CountryCode | string, region: string): boolean {
+  const cc = String(country ?? '').toUpperCase();
+  return isLaunch(cc) && Boolean(findCurated(cc, region));
+}
+
+/** Whether a country is known to Gaskin's geography data (ISO 3166-1) */
+export function isKnownCountry(country: string | undefined): boolean {
+  return Boolean(getCountry(country));
 }
 
 /** Great-circle distance in kilometres */
@@ -195,7 +247,7 @@ const CACHE_KEY = 'gaskin.location.cache.v1';
 const SAVED_KEY = 'gaskin.location.profile.v1';
 
 export interface BuildInput {
-  country: CountryCode;
+  country: CountryCode | string;
   region: string;
   district?: string;
   lat?: number;
@@ -306,7 +358,7 @@ export async function buildLocationProfile(input: BuildInput, opts: BuildOptions
       base = {
         ...base,
         referralFacilities: [...base.referralFacilities, ...extra].sort((a, b) => (a.distanceKm ?? 1e9) - (b.distanceKm ?? 1e9)),
-        sources: [...base.sources, { id: 'osm-overpass', label: `OpenStreetMap contributors, via Overpass API (${ISO3[input.country]}), fetched at setup`, url: 'https://www.openstreetmap.org/copyright' }],
+        sources: [...base.sources, { id: 'osm-overpass', label: `OpenStreetMap contributors, via Overpass API (${ISO3[input.country as CountryCode] ?? input.country}), fetched at setup`, url: 'https://www.openstreetmap.org/copyright' }],
         origin: base.origin === 'curated' ? 'curated' : 'generated',
       };
     }
